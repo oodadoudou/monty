@@ -85,6 +85,10 @@ impl VM<'_> {
 
     /// Loads a `from ... import` attribute, raising `ImportError` if missing.
     /// `module_id` supplies the error's module name because host values need not be `Module`s.
+    ///
+    /// Out-of-line: cold opcode; keeps `VM::run`'s dispatch loop small
+    /// (I-cache/register pressure).
+    #[inline(never)]
     pub(super) fn load_attr_import(&mut self, name_id: StringId, module_id: StringId) -> Result<CallResult, RunError> {
         let this = self;
 
