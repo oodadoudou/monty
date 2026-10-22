@@ -256,7 +256,7 @@ impl VM<'_> {
         };
         let key = allocate_string(leaf, self.heap);
         self.heap.inc_ref(module);
-        let HeapReadOutput::Dict(mut dict) = self.heap.read(namespace) else {
+        let HeapReadOutput::Dict(dict) = self.heap.read(namespace) else {
             unreachable!("a file module's namespace is a dict")
         };
         let old = dict.set(key, Value::Ref(module), self)?;
