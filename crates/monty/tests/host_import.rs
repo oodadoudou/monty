@@ -187,9 +187,7 @@ fn a_not_found_answer_is_a_module_not_found_error() {
 
     let call = start("import nope").into_os_call().unwrap();
     let progress = call
-        .resume_with(PrintWriter::Stdout, |call| {
-            ExtFunctionResult::Error(call.on_no_handler())
-        })
+        .resume_with(PrintWriter::Stdout, |call| call.no_handler_result())
         .unwrap();
     let err = read_no_files(progress).unwrap_err();
     assert_snapshot!(err.to_string(), @r#"

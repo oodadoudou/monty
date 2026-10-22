@@ -772,7 +772,7 @@ impl Child {
                 let ReplProgress::OsCall(call) = progress.as_ref() else {
                     return protocol_violation("NotHandled is only valid answering a suspended OS call");
                 };
-                ExtFunctionResult::Error(call.function_call.on_no_handler())
+                call.function_call.no_handler_result()
             } else {
                 match ext_result_from_proto(wire_result, resume.values) {
                     Ok(result) => result,

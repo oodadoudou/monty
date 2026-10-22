@@ -987,8 +987,8 @@ pub(crate) fn resume_with_result(
 }
 
 /// Resumes an import with the host's module value or raises its exception without carets.
-/// `NotFound` or a `ModuleNotFoundError` (every host's no-handler default) searches for a
-/// `.py` file instead; futures are rejected because imports cannot await.
+/// `NotFound` (also what a host with no handler answers) searches for a `.py` file
+/// instead; futures are rejected because imports cannot await.
 fn resume_import(
     vm: &mut VM<'_>,
     module_id: StringId,
@@ -997,15 +997,12 @@ fn resume_import(
 ) -> Result<FrameExit, RunError> {
     match (result, eager_call_id) {
         (ExtFunctionResult::Return(obj), None) => vm.resume(obj),
-        (ExtFunctionResult::Error(exc), None) if exc.exc_type() == ExcType::ModuleNotFoundError => {
-            vm.resume_import_from_files(vm.interns.get_str(module_id), Some(exc))
-        }
         (ExtFunctionResult::Error(exc), None) => {
             let mut raise = ExceptionRaise::from(exc);
             raise.hide_caret = true;
             vm.resume_with_exception(RunError::Exc(raise))
         }
-        (ExtFunctionResult::NotFound(_), None) => vm.resume_import_from_files(vm.interns.get_str(module_id), None),
+        (ExtFunctionResult::NotFound(_), None) => vm.resume_import_from_files(vm.interns.get_str(module_id)),
         (ExtFunctionResult::Future(_), _) | (_, Some(_)) => {
             let message = format!(
                 "import of '{}' cannot be answered with a future",

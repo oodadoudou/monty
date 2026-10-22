@@ -527,10 +527,13 @@ async fn a_module_file_in_a_mount_is_imported() {
     let result = session.feed(code, vec![], mount(), false, &mut no_print).await;
     let mut event = feed_with_mounts(&mut session, result).await.unwrap();
     // no host modules: each host import is unhandled, so the module is read from the mount
+    let mut host_imports = Vec::new();
     while matches!(&event, TurnEvent::OsCall { function_name, .. } if function_name == IMPORT_CALL) {
+        host_imports.push(expect_import(event));
         let result = session.resume(ResumeValue::NotHandled, &mut no_print).await;
         event = feed_with_mounts(&mut session, result).await.unwrap();
     }
+    assert_eq!(host_imports, ["helpers", "pkg"]);
     assert_eq!(
         expect_complete(event),
         MontyObject::tuple([MontyObject::int(6), MontyObject::string("/mnt/helpers.py".to_owned())])

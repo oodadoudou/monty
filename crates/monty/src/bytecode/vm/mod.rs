@@ -710,7 +710,7 @@ impl VMSnapshot {
     /// stacks, scheduler tasks, pending resume effects), and returns the
     /// globals, working directory, `random` generator and file modules so an
     /// abandoned REPL snippet keeps its namespace, any `os.chdir` it made, any
-    /// seed it set and any module it imported. Mirrors `VM::drop`.
+    /// seed it set and any module it finished importing. Mirrors `VM::drop`.
     pub(crate) fn abandon(self, heap: &mut Heap) -> AbandonedState {
         let Self {
             stack,
@@ -722,7 +722,7 @@ impl VMSnapshot {
             pending_lookup_effect,
             cwd,
             random,
-            modules,
+            mut modules,
             ..
         } = self;
         HeapReader::with(heap, &mut (), |heap, ()| {
@@ -734,6 +734,8 @@ impl VMSnapshot {
                 frame.namespace.drop_with(heap);
             }
             scheduler.cleanup(heap);
+            // a module body interrupted here must run again at the next import
+            modules.remove_unfinished(heap);
         });
         AbandonedState {
             globals,

@@ -372,8 +372,8 @@ runs the factory again.
 An import of a module absent from `external_modules` reads its `.py` file from the working directory
 (see [importing modules](filesystem.md#importing-modules)) and raises `ModuleNotFoundError` without one; the sandbox's
 own modules, `json` or `math`, are never looked up here.
-Every `import` statement asks again: the sandbox caches only modules read from files, and a module bound by an earlier
-feed is a plain global.
+Every `import` of a host module asks again: the sandbox caches only modules read from files, and a module bound by an
+earlier feed is a plain global.
 Each import sends the entry the mapping holds at that moment, so replacing an entry changes what the next import
 binds, while a module's own `attrs` never change after construction.
 The bound value is a module object: `type(tools)` is `module`, a missing attribute raises

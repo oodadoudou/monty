@@ -1,6 +1,6 @@
 //! Python module type for representing imported modules.
 
-use monty_types::MontyUuid;
+use monty_types::{MontyUuid, StringRepr};
 
 use crate::{
     args::ArgValues,
@@ -98,12 +98,13 @@ impl Module {
         }
     }
 
-    /// `<module 'name'>`, or `<module 'name' from 'path'>` for a file module.
+    /// `<module 'name'>`, or `<module 'name' from 'path'>` for a file module,
+    /// both quoted as `repr()` quotes a string.
     pub fn repr(&self, interns: &Interns) -> String {
-        let name = self.name_str(interns);
+        let name = StringRepr(self.name_str(interns));
         match self.origin() {
-            Some(origin) => format!("<module '{name}' from '{origin}'>"),
-            None => format!("<module '{name}'>"),
+            Some(origin) => format!("<module {name} from {}>", StringRepr(origin)),
+            None => format!("<module {name}>"),
         }
     }
 

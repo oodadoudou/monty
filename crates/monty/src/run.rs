@@ -752,7 +752,7 @@ impl Program {
                     function_call: call @ OsFunctionCall::Import(_),
                     ..
                 }) => {
-                    frame_exit_result = resume_with_result(vm, ExtFunctionResult::Error(call.on_no_handler()), None);
+                    frame_exit_result = resume_with_result(vm, call.no_handler_result(), None);
                 }
                 Ok(FrameExit::OsCall {
                     function_call,

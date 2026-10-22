@@ -43,7 +43,7 @@ fn feed_logged(
                         reads.push(path.as_str().to_owned());
                         read(files, path.as_str())
                     }
-                    other => ExtFunctionResult::Error(other.on_no_handler()),
+                    other => other.no_handler_result(),
                 };
                 let ReplProgress::OsCall(call) = round_trip(ReplProgress::OsCall(call)) else {
                     unreachable!("a dump restores the same suspension")
@@ -427,5 +427,68 @@ fn module_code_does_not_ask_the_host_for_names() {
     assert_eq!(
         eval("import helpers\nhelpers.fetch = lambda: 42\nhelpers.run()", files),
         MontyObject::int(42)
+    );
+}
+
+/// Only `not_found` (what a host with no handler answers) looks for a file: a
+/// `ModuleNotFoundError` the host raises is the import's error.
+#[test]
+fn a_host_import_error_reads_no_files() {
+    let progress = repl()
+        .feed_start("import tools", Vec::<(String, MontyObject)>::new(), PrintWriter::Stdout)
+        .unwrap();
+    let ReplProgress::OsCall(call) = progress else {
+        panic!("expected the host import");
+    };
+    let missing_dependency = MontyException::new(
+        ExcType::ModuleNotFoundError,
+        Some("No module named 'dependency'".to_owned()),
+    );
+    assert_eq!(
+        resume_err(call, ExtFunctionResult::Error(missing_dependency)),
+        "ModuleNotFoundError: No module named 'dependency'"
+    );
+}
+
+#[test]
+fn a_package_path_may_be_a_tuple() {
+    let files = &[
+        ("/proj/pkg/__init__.py", "__path__ = ('/elsewhere',)\n"),
+        ("/elsewhere/sub.py", "value = 5\n"),
+    ];
+    assert_eq!(eval("import pkg.sub\npkg.sub.value", files), MontyObject::int(5));
+}
+
+#[test]
+fn a_module_repr_quotes_its_path() {
+    let files = &[("/it's/foo.py", "")];
+    let mut repl = repl();
+    repl.set_cwd("/it's");
+    assert_eq!(
+        feed(repl, "import foo\nrepr(foo)", files).1.unwrap(),
+        MontyObject::string("<module 'foo' from \"/it's/foo.py\">")
+    );
+}
+
+/// A snippet abandoned while a module body is suspended must not leave the
+/// unfinished module cached: the next import runs the file again.
+#[test]
+fn an_abandoned_import_is_not_cached() {
+    let files = &[("/proj/foo.py", "import os\nstage = os.getenv('STAGE')\n")];
+    let call = first_read("import foo");
+    let progress = call.resume(read(files, "/proj/foo.py"), PrintWriter::Stdout).unwrap();
+    let ReplProgress::OsCall(getenv) = progress else {
+        panic!("expected the module body to suspend");
+    };
+    assert_eq!(getenv.function_call.name(), "os.getenv");
+    let repl = getenv.into_repl();
+
+    let mut reads = Vec::new();
+    let (_, result) = feed_logged(repl, "import foo", files, &mut reads);
+    assert_eq!(reads, ["/proj/foo.py"]);
+    // the body runs again, reaching the `os.getenv` this harness does not serve
+    assert_eq!(
+        result.unwrap_err(),
+        "RuntimeError: 'os.getenv' is not supported in this environment"
     );
 }

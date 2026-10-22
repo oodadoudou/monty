@@ -79,8 +79,9 @@ export interface CheckoutOptions {
   typeCheckStubs?: string
   /**
    * Importable host modules for every feed of the session (see [`ExternalModules`]); other
-   * imports read `<cwd>/name.py` through the mounts and `os` handler, and raise
-   * `ModuleNotFoundError` without one. The record is read live, each entry validated when a
+   * non-bundled imports read `<cwd>/name.py`, or a package's `<cwd>/name/__init__.py`, through
+   * the mounts and `os` handler, and raise `ModuleNotFoundError` when neither exists. The record
+   * is read live, each entry validated when a
    * snippet first imports it, so modules may be added later; a factory runs once per session.
    */
   externalModules?: ExternalModules

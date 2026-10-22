@@ -10,13 +10,13 @@
 
 use std::sync::Arc;
 
-use monty_types::{ExcType, MontyException, MontyObject, MontyPath, OsFunctionCall};
+use monty_types::{ExcType, MontyObject, MontyPath, OsFunctionCall};
 
 use super::{FrameExit, FrameNamespace, VM, namespace::FrameGlobals};
 use crate::{
     builtins::eval_exec::{SnippetSource, compile_and_push},
     bytecode::CallResult,
-    exception_private::{ExcTypeExt, ExceptionRaise, RunError, RunResult, SimpleException},
+    exception_private::{ExcTypeExt, RunError, RunResult, SimpleException},
     heap::{DropWithContext, HeapData, HeapId, HeapReadOutput},
     intern::StringId,
     os_dispatch::PendingEffect,
@@ -50,10 +50,8 @@ enum Candidate {
 /// What an import raises when no directory has its file.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 enum OnMiss {
-    /// `ModuleNotFoundError`: the host answered `not_found`, or this is `import pkg.sub`.
+    /// `import name` and `import pkg.sub` raise `ModuleNotFoundError`.
     ModuleNotFound,
-    /// The `ModuleNotFoundError` the host raised for a top-level import.
-    HostError(Box<MontyException>),
     /// `from pkg import sub` raises `ImportError` naming `pkg`'s file.
     CannotImport {
         /// The parent package's file, for the message.
@@ -143,21 +141,15 @@ impl VM<'_> {
     }
 
     /// Resumes a top-level import the host has no module for: searches
-    /// [`SEARCH_PATH`] for its file, raising `host_error` (or a plain
-    /// `ModuleNotFoundError`) if there is none.
-    pub(crate) fn resume_import_from_files(
-        &mut self,
-        name: &str,
-        host_error: Option<MontyException>,
-    ) -> Result<FrameExit, RunError> {
+    /// [`SEARCH_PATH`] for its file, raising `ModuleNotFoundError` if there is none.
+    pub(crate) fn resume_import_from_files(&mut self, name: &str) -> Result<FrameExit, RunError> {
         let dirs = SEARCH_PATH
             .iter()
             .map(|entry| match entry {
                 SearchEntry::Cwd => self.env.cwd.to_string(),
             })
             .collect();
-        let on_miss = host_error.map_or(OnMiss::ModuleNotFound, |exc| OnMiss::HostError(Box::new(exc)));
-        match start_search(name.to_owned(), dirs, on_miss) {
+        match start_search(name.to_owned(), dirs, OnMiss::ModuleNotFound) {
             Ok(probe) => {
                 let call = probe.call();
                 self.suspend_again(call, Some(PendingEffect::Import(probe)))
@@ -244,12 +236,14 @@ impl VM<'_> {
         }
     }
 
-    /// After a module body returns: binds a submodule on its parent package, as
-    /// CPython does once the import succeeds. A no-op for an `__init__` frame.
+    /// After a module body returns: marks it initialised and binds a submodule
+    /// on its parent package, as CPython does once the import succeeds. A no-op
+    /// for an `__init__` frame.
     pub(super) fn finish_module_init(&mut self) -> RunResult<()> {
         let Some((module, name)) = self.file_module_on_stack() else {
             return Ok(());
         };
+        self.modules.finish(&name, module);
         let Some((parent_name, leaf)) = name.rsplit_once('.') else {
             return Ok(());
         };
@@ -360,13 +354,14 @@ impl VM<'_> {
         })
     }
 
-    /// A package's `__path__` as directories, skipping anything that is not a `str`.
+    /// A package's `__path__` (a list or tuple) as directories, skipping anything that is not a `str`.
     fn search_path(&self, path: &Value) -> Vec<String> {
-        let Some(HeapData::List(list)) = path.ref_id().map(|id| self.heap.get(id)) else {
-            return Vec::new();
+        let dirs = match path.ref_id().map(|id| self.heap.get(id)) {
+            Some(HeapData::List(list)) => list.as_slice(),
+            Some(HeapData::Tuple(tuple)) => tuple.as_slice(),
+            _ => return Vec::new(),
         };
-        list.as_slice()
-            .iter()
+        dirs.iter()
             .filter_map(|dir| dir.to_str_heap(self.heap, self.interns).ok())
             .map(str::to_owned)
             .collect()
@@ -404,12 +399,6 @@ fn start_search(name: String, dirs: Vec<String>, on_miss: OnMiss) -> RunResult<I
 fn missed_import(name: &str, on_miss: OnMiss) -> RunError {
     match on_miss {
         OnMiss::ModuleNotFound => ExcType::module_not_found_error(name, None),
-        OnMiss::HostError(exc) => {
-            // CPython shows no carets for import errors.
-            let mut raise = ExceptionRaise::from(*exc);
-            raise.hide_caret = true;
-            RunError::Exc(raise)
-        }
         OnMiss::CannotImport { origin } => {
             let (parent, attr) = name.rsplit_once('.').expect("a submodule name is dotted");
             ExcType::cannot_import_name(attr, parent, Some(&origin))

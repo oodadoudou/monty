@@ -142,7 +142,8 @@ The divergences are in [`limitations/os.md`](limitations/os.md).
 `import helpers` reads `helpers.py`, or the package `helpers/__init__.py`, from the working directory when no
 [host module](host-functions.md#importing-host-modules) of that name exists, so a module file in a mount imports
 directly.
-The reads go through the mounts and the `os` callback exactly as `open()` does, and each module runs once per session:
+The reads go through the mounts and the `os` callback exactly as `open()` does, and each module that imports
+successfully runs once per session:
 
 === "Python"
 

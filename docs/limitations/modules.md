@@ -89,8 +89,8 @@ typeshed's `abc` declarations.
 ## Host modules
 
 Unknown imports request the top-level name through the `import` OS call; `__import__` is undefined.
-A host module shadows a file of the same name; a `not_found` answer or a `ModuleNotFoundError` from the host moves
-on to [files](#modules-from-files).
+A host module shadows a file of the same name; a `not_found` answer, or no handler, moves on to
+[files](#modules-from-files), while an exception the host raises is the import's error.
 Dotted imports such as `import a.b.c` request `a`, then read `b` and `c` as successive attributes.
 Bundled modules that are not packages never request host submodules: `import os.x` raises
 `ModuleNotFoundError: No module named 'os.x'; 'os' is not a package`.
@@ -118,8 +118,8 @@ With no host to answer, `monty file.py` included, every unknown module raises `M
 An `import` of a top-level name the host has no module for reads `<cwd>/name.py`, then `<cwd>/name/__init__.py`, and
 runs the first it finds as the module.
 The reads are `Path.read_text` OS calls, served exactly as `open()` is: by a mount or the host's `os` handler.
-`FileNotFoundError`, `NotADirectoryError`, `IsADirectoryError` and `PermissionError` (the answer outside any mount)
-move on to the next file; any other error raises at the `import`.
+`FileNotFoundError`, `NotADirectoryError`, `IsADirectoryError` and `PermissionError` (including the answer outside
+any mount) move on to the next file; any other error raises at the `import`.
 Differences from CPython:
 
 - The working directory at the time of the `import` is the only search location.
