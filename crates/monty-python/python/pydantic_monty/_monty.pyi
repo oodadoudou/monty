@@ -692,7 +692,8 @@ class Monty:
                 each entry validated when first imported, so modules may be
                 added later. Non-bundled names the mapping lacks read the package
                 `<cwd>/name/__init__.py`, else `<cwd>/name.py`, through the mounts
-                and `os` handler, raising `ModuleNotFoundError` when neither exists.
+                and `os` handler and run the file as sandbox code, raising
+                `ModuleNotFoundError` when neither exists.
         """
 
 @final

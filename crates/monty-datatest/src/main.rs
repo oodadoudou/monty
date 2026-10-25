@@ -2688,22 +2688,25 @@ fn try_run_cpython_test(
 }
 
 /// Undoes a `mount-fs` case's imports in the shared interpreter: takes `root`
-/// off `sys.path` and evicts the modules loaded from it, so the next case
+/// off `sys.path` and evicts the finders and modules under it, so the next case
 /// (with its own `root`) imports its own files.
 fn forget_mount_imports(py: Python<'_>, root: &Path) {
     let code = c"
-import sys
+import os, sys
 root = str(root)
+def under_root(path):
+    return isinstance(path, str) and (path == root or path.startswith(root + os.sep))
 if root in sys.path:
     sys.path.remove(root)
-sys.path_importer_cache.pop(root, None)
+for path in [path for path in sys.path_importer_cache if under_root(path)]:
+    del sys.path_importer_cache[path]
 for name, module in list(sys.modules.items()):
-    if (getattr(module, '__file__', None) or '').startswith(root):
+    if under_root(getattr(module, '__file__', None)):
         del sys.modules[name]
 ";
-    let locals = PyDict::new(py);
-    locals.set_item("root", root).expect("Failed to pass the mount root");
-    py.run(code, None, Some(&locals))
+    let globals = PyDict::new(py);
+    globals.set_item("root", root).expect("Failed to pass the mount root");
+    py.run(code, Some(&globals), None)
         .expect("Failed to forget the mount-fs imports");
 }
 

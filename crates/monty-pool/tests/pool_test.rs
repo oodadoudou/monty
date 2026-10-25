@@ -3095,7 +3095,7 @@ async fn an_import_is_answered_by_the_host() {
     assert_eq!(expect_import(event), "nope");
     // a module the host lacks is looked for as a file, read like any other
     let mut event = session.resume(ResumeValue::NotFound, &mut no_print).await;
-    for path in ["/nope.py", "/nope/__init__.py"] {
+    for path in ["/nope/__init__.py", "/nope.py"] {
         let Ok(TurnEvent::OsCall {
             function_name, args, ..
         }) = event

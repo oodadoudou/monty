@@ -80,9 +80,9 @@ export interface CheckoutOptions {
   /**
    * Importable host modules for every feed of the session (see [`ExternalModules`]); non-bundled
    * names the record lacks read the package `<cwd>/name/__init__.py`, else `<cwd>/name.py`, through
-   * the mounts and `os` handler, and raise `ModuleNotFoundError` when neither exists. The record
-   * is read live, each entry validated when a
-   * snippet first imports it, so modules may be added later; a factory runs once per session.
+   * the mounts and `os` handler and run the file as sandbox code, raising `ModuleNotFoundError` when
+   * neither exists. The record is read live, each entry validated when a snippet first imports it,
+   * so modules may be added later; a factory runs once per session.
    */
   externalModules?: ExternalModules
   /**
