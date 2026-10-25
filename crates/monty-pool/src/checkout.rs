@@ -287,7 +287,8 @@ pub enum TurnEvent {
     /// [`OsFunctionCall::Import`] takes a module value, or, failing that, the module's
     /// [`ResumeValue::ModuleFile`] from its search path (the caller's `os` handler, then
     /// [`Checkout::read_from_mounts`]), which the sandbox runs as sandbox code; `NotFound` /
-    /// `NotHandled` raise `ModuleNotFoundError`, and an error is raised at the import.
+    /// `NotHandled` raise the statement's miss error (`ModuleNotFoundError`, or `ImportError`
+    /// for `from pkg import sub`), and an error is raised at the import.
     /// [`OsFunctionCall::ImportStubs`] takes a dict of dotted module paths to `.pyi` source
     /// or `None`, or `NotHandled` for no stubs.
     OsCall {
@@ -1077,7 +1078,7 @@ impl Checkout {
 
     /// Reads one candidate file of a pending `import` call through this feed's
     /// mounts, without resuming the worker; [`ModuleRead::NotHandled`] when no
-    /// mount covers `path`. A host answering an import itself reads each
+    /// mount covers `path`. Any other pending suspension is a protocol error. A host answering an import itself reads each
     /// [`ImportArgs::candidates`](monty_types::ImportArgs::candidates) path,
     /// then resumes with [`ResumeValue::ModuleFile`] or [`ResumeValue::NotFound`].
     ///
@@ -1085,6 +1086,16 @@ impl Checkout {
     /// discards the worker on the next call, as for [`Self::resume_from_mounts`].
     pub async fn read_from_mounts(&mut self, path: &str) -> Result<ModuleRead, PoolError> {
         self.ensure_ready()?;
+        let searches_files = matches!(
+            &self.pending,
+            Some(Pending::Call { os_call: Some(call), .. })
+                if matches!(call.as_ref(), OsFunctionCall::Import(args) if !args.search_path.is_empty())
+        );
+        if !searches_files {
+            return Err(PoolError::Protocol(
+                "read_from_mounts is only valid answering an import with a search path".into(),
+            ));
+        }
         let Some(mut mounts) = self.feed_mounts.take() else {
             return Ok(ModuleRead::NotHandled);
         };

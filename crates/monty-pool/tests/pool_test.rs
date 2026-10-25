@@ -552,6 +552,9 @@ async fn a_module_file_in_a_mount_is_imported() {
         expect_complete(event),
         MontyObject::tuple([MontyObject::int(6), MontyObject::string("/mnt/helpers.py".to_owned())])
     );
+    // a mount read answers only a pending import
+    let err = session.read_from_mounts("/mnt/helpers.py").await.unwrap_err();
+    assert!(matches!(err, PoolError::Protocol(_)), "{err:?}");
     session.finish().await.unwrap();
 }
 

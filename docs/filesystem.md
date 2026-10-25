@@ -143,7 +143,8 @@ The divergences are in [`limitations/os.md`](limitations/os.md).
 [host module](host-functions.md#importing-host-modules) of that name exists, so a module file in a mount imports
 directly.
 The host reads each candidate itself, through the `os` callback first and the mounts when the callback declines it,
-so the whole search costs one round trip; each module that imports successfully runs once per session:
+so the whole search costs one round trip; each module that imports successfully runs once per session.
+Only a name `external_modules` lacks is searched for: a factory exception is the import's error, and no file is read:
 
 === "Python"
 

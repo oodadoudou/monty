@@ -111,7 +111,7 @@ The host's answer becomes the imported `module` object, with these differences f
     Wrap a class in `ClassType` to send it as a type.
 - Imports with more than 32 dotted components raise `SyntaxError`; `import a.b.c` has three.
 
-With no host to answer, every unknown module raises `ModuleNotFoundError`.
+With no host or mount to answer, every unknown module raises `ModuleNotFoundError`.
 `monty file.py` answers imports from its `--mount` directories only (see [files](#modules-from-files)).
 
 ## Modules from files

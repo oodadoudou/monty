@@ -127,8 +127,9 @@ its search path: the working directory for a top-level name, or a file package's
 A returned value becomes the module; dotted imports read subsequent components as attributes of that value.
 Hosts usually return a host-backed class instance containing the module's attributes.
 A host with no such module can answer `ExtFunctionResult::ModuleFile` with the module's `.py` file instead:
-`find_module_file` searches `ImportArgs::candidates` with a read function the host supplies, and
-`MountTable::find_module` searches the mounts.
+`ImportArgs::candidates` lists `<dir>/name/__init__.py`, then `<dir>/name.py`, for each search directory,
+`find_module_file` reads them in turn with a function the host supplies (a missing file moves on, any other read error
+is the answer), and `MountTable::find_module` searches the mounts.
 The sandbox runs the file as the module and caches it for the session.
 `ExtFunctionResult::NotFound` (what `OsFunctionCall::no_handler_result` answers), or running without a host, raises
 `ModuleNotFoundError`; an exception the host raises for the import is raised as it is.

@@ -187,8 +187,8 @@ indistinguishable from a stack overflow.
     external function calls, host-object method calls, attribute lookups and
     construction, OS calls, name lookups, and each `ResolveFutures` round trip
     (a partial future resolution that re-suspends counts again).
-    Each [module from a file](modules.md#modules-from-files) costs one `import` call, however many files the host
-    reads to find it; a cached module costs nothing.
+    Each import of a module the [file-module cache](modules.md#modules-from-files) lacks costs one `import` call,
+    whether or not the host finds its file and however many files it reads; a cached module costs nothing.
 - It defaults to 1000 and cannot be disabled (like `max_recursion_depth`):
     omitting it, or passing `None`, keeps the default; set a larger number
     for sessions that legitimately make more host calls.

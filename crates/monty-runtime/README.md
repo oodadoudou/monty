@@ -39,7 +39,8 @@ monty --help
 - `-m` / `--mount /host/path::/virtual/path[::mode[::write_limit_bytes]]` —
   mount a host directory into the sandbox (`ro`, `rw`, or `overlay`); repeat
   for several, which need distinct virtual paths and disjoint host directories;
-  an `import` of a module the sandbox does not bundle runs its `.py` file from them
+  an `import` of a module the sandbox does not bundle runs `<cwd>/name/__init__.py`,
+  else `<cwd>/name.py`, from them, raising `ModuleNotFoundError` when neither exists
 - `--cwd /virtual/path` — the sandbox's working directory (default: the first
   mount's virtual path, else `/`); relative paths resolve against it
 - `--max-memory 10MB`, `--max-feed-duration 0.5`,
