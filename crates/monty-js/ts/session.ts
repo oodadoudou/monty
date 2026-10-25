@@ -1637,19 +1637,35 @@ const MISSING_FILE_ERRORS = new Set(['FileNotFoundError', 'NotADirectoryError', 
  * An import's candidate files, mirroring `ImportArgs::candidates` in
  * monty-types: per directory, the package `name/__init__.py` before the module
  * `name.py`. The call comes from an untrusted worker, so a name that is not
- * dotted identifiers, or a directory that is not absolute, yields nothing.
+ * dotted identifiers, or a directory that is not absolute, yields nothing; the
+ * rest are normalized, so a handler checking a prefix never sees `..`, and
+ * built one at a time, so a long name times many directories never sits in memory.
  */
-function importCandidates(name: string, searchPath: unknown): string[] {
+function* importCandidates(name: string, searchPath: unknown): Generator<string> {
   if (!Array.isArray(searchPath) || !name.split('.').every((part) => IDENTIFIER.test(part))) {
-    return []
+    return
   }
   const leaf = name.slice(name.lastIndexOf('.') + 1)
-  return searchPath
-    .filter((dir): dir is string => typeof dir === 'string' && dir.startsWith('/') && !dir.includes('\0'))
-    .flatMap((dir) => {
-      const base = dir.endsWith('/') ? dir.slice(0, -1) : dir
-      return [`${base}/${leaf}/__init__.py`, `${base}/${leaf}.py`]
-    })
+  for (const dir of searchPath) {
+    if (typeof dir === 'string' && dir.startsWith('/') && !dir.includes('\0')) {
+      const base = normalizeVirtualPath(dir).replace(/\/$/, '')
+      yield `${base}/${leaf}/__init__.py`
+      yield `${base}/${leaf}.py`
+    }
+  }
+}
+
+/** An absolute POSIX path with `.` removed and `..` resolved, stopping at `/`, as `normalize_virtual_path` in monty-types. */
+function normalizeVirtualPath(path: string): string {
+  const parts: string[] = []
+  for (const segment of path.split('/')) {
+    if (segment === '..') {
+      parts.pop()
+    } else if (segment !== '' && segment !== '.') {
+      parts.push(segment)
+    }
+  }
+  return `/${parts.join('/')}`
 }
 
 /** A Python identifier, as far as a module name component needs one. */

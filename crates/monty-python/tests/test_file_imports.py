@@ -47,6 +47,26 @@ def test_the_os_handler_serves_module_files(monty_run: RunMonty):
     )
 
 
+def test_the_os_handler_sees_normalized_paths(monty_run: RunMonty):
+    reads: list[Any] = []
+
+    def os_handler(*, args: tuple[Any, ...], **_: Any) -> Any:
+        reads.append(args[0])
+        return "__path__ = ['/allowed/../private']\n" if args == (PurePosixPath('/pkg/__init__.py'),) else NOT_HANDLED
+
+    with pytest.raises(MontyRuntimeError) as exc_info:
+        monty_run('import pkg.secrets', os=os_handler)
+    assert str(exc_info.value) == snapshot("ModuleNotFoundError: No module named 'pkg.secrets'")
+    # a `..` in a sandbox-set `__path__` is resolved before the handler sees it
+    assert reads == snapshot(
+        [
+            PurePosixPath('/pkg/__init__.py'),
+            PurePosixPath('/private/secrets/__init__.py'),
+            PurePosixPath('/private/secrets.py'),
+        ]
+    )
+
+
 def test_the_os_handler_is_read_before_mounts(monty_run: RunMonty, project: Path):
     def os_handler(*, name: str, args: tuple[Any, ...], **_: Any) -> Any:
         if args == (PurePosixPath('/proj/helpers.py'),):

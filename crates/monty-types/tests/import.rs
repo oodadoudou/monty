@@ -16,22 +16,65 @@ fn args(module: &str, search_path: &[&str]) -> ImportArgs {
 #[test]
 fn candidates_put_the_package_first_in_each_directory() {
     assert_eq!(
-        args("pkg.sub", &["/a", "/b/"]).candidates(),
+        args("pkg.sub", &["/a", "/b/"]).candidates().collect::<Vec<_>>(),
         ["/a/sub/__init__.py", "/a/sub.py", "/b/sub/__init__.py", "/b/sub.py"]
     );
-    assert_eq!(args("top", &["/"]).candidates(), ["/top/__init__.py", "/top.py"]);
+    assert_eq!(
+        args("top", &["/"]).candidates().collect::<Vec<_>>(),
+        ["/top/__init__.py", "/top.py"]
+    );
 }
 
 /// The call comes from an untrusted sandbox: nothing outside a plain search is read.
 #[test]
 fn candidates_reject_untrusted_names_and_directories() {
-    assert_eq!(args("../etc", &["/a"]).candidates(), Vec::<String>::new());
-    assert_eq!(args("a/b", &["/a"]).candidates(), Vec::<String>::new());
-    assert_eq!(args("pkg..sub", &["/a"]).candidates(), Vec::<String>::new());
     assert_eq!(
-        args("m", &["relative", "/nul\0", "/ok"]).candidates(),
+        args("../etc", &["/a"]).candidates().collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        args("a/b", &["/a"]).candidates().collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        args("pkg..sub", &["/a"]).candidates().collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        args("m", &["relative", "/nul\0", "/ok"])
+            .candidates()
+            .collect::<Vec<_>>(),
         ["/ok/m/__init__.py", "/ok/m.py"]
     );
+}
+
+/// A sandbox-set `__path__` cannot hide `..` from a handler checking a path prefix.
+#[test]
+fn candidates_are_normalized() {
+    assert_eq!(
+        args("secrets", &["/allowed/../private", "/a/./b//"])
+            .candidates()
+            .collect::<Vec<_>>(),
+        [
+            "/private/secrets/__init__.py",
+            "/private/secrets.py",
+            "/a/b/secrets/__init__.py",
+            "/a/b/secrets.py"
+        ]
+    );
+}
+
+/// A long name across many directories is expanded one directory at a time,
+/// never all at once.
+#[test]
+fn candidates_are_built_lazily() {
+    let name = "m".repeat(100_000);
+    let search = ImportArgs {
+        module: name.clone(),
+        search_path: vec!["/".to_owned(); 10_000],
+    };
+    let first = search.candidates().next();
+    assert_eq!(first, Some(format!("/{name}/__init__.py")));
 }
 
 #[test]

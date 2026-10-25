@@ -47,6 +47,18 @@ test('the os handler serves module files', async () => {
   ])
 })
 
+test('the os handler sees normalized paths', async () => {
+  const reads: unknown[] = []
+  const handler = (_name: string, args: unknown[]) => {
+    reads.push(args[0])
+    return args[0] === '/pkg/__init__.py' ? "__path__ = ['/allowed/../private']\n" : NOT_HANDLED
+  }
+  const error = await t.throwsAsync(() => run('import pkg.secrets', { os: handler }))
+  t.is(error.message, "ModuleNotFoundError: No module named 'pkg.secrets'")
+  // a `..` in a sandbox-set `__path__` is resolved before the handler sees it
+  t.deepEqual(reads, ['/pkg/__init__.py', '/private/secrets/__init__.py', '/private/secrets.py'])
+})
+
 test('an async os handler serves module files', async () => {
   const handler = async (_name: string, args: unknown[]) => (args[0] === '/served.py' ? 'answer = 42\n' : NOT_HANDLED)
   t.is(await run('import served\nserved.answer', { os: handler }), 42)

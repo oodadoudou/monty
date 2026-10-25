@@ -1215,7 +1215,7 @@ fn an_import_without_a_search_path_is_host_modules_only() {
         panic!("expected an import");
     };
     assert_eq!(args, ImportArgs::new("tools"));
-    assert_eq!(args.candidates(), Vec::<String>::new());
+    assert_eq!(args.candidates().count(), 0);
 }
 
 /// A child-supplied fixed offset outside `datetime.timezone`'s range is refused
