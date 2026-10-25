@@ -1670,16 +1670,17 @@ pub(crate) trait ExcTypeExt: Sized {
     #[must_use]
     fn cannot_import_name(name: &str, module_name: &str, origin: Option<&str>) -> RunError {
         let origin = origin.unwrap_or("unknown location");
-        let exc = SimpleException::new_msg(
-            ExcType::ImportError,
-            format!("cannot import name '{name}' from '{module_name}' ({origin})"),
-        );
-        RunError::Exc(ExceptionRaise {
-            exc,
-            frame: None,
-            snippet_frame: None,
-            hide_caret: true,
-        })
+        import_error_without_caret(format!("cannot import name '{name}' from '{module_name}' ({origin})"))
+    }
+
+    /// The `ImportError` for `from module import name` while `module`'s body is
+    /// still running, CPython's hint at a circular import.
+    #[must_use]
+    fn cannot_import_name_partial(name: &str, module_name: &str, origin: &str) -> RunError {
+        import_error_without_caret(format!(
+            "cannot import name '{name}' from partially initialized module '{module_name}' \
+             (most likely due to a circular import) ({origin})"
+        ))
     }
 
     /// Creates a ValueError when an integer is too large to convert to a decimal string.
@@ -2990,6 +2991,16 @@ impl RunError {
 /// CPython's `ModuleNotFoundError` message for `module_name`.
 fn no_module_named(module_name: &str) -> String {
     format!("No module named '{module_name}'")
+}
+
+/// An `ImportError` shown without carets, as CPython shows import errors.
+fn import_error_without_caret(msg: String) -> RunError {
+    RunError::Exc(ExceptionRaise {
+        exc: SimpleException::new_msg(ExcType::ImportError, msg),
+        frame: None,
+        snippet_frame: None,
+        hide_caret: true,
+    })
 }
 
 /// Formats a list of parameter names for error messages, matching CPython's

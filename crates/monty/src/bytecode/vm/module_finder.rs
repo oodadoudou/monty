@@ -56,6 +56,8 @@ enum OnMiss {
     CannotImport {
         /// The parent package's file, for the message.
         origin: String,
+        /// Whether the parent's body was still running, which the message points out.
+        partial: bool,
     },
 }
 
@@ -125,6 +127,8 @@ impl ImportProbe {
 struct FileParent {
     name: String,
     origin: String,
+    /// Whether its body is still running, as in a circular import.
+    initializing: bool,
     /// The package's `__path__`; `None` for a plain module, which has no submodules.
     search_path: Option<Vec<String>>,
 }
@@ -178,13 +182,16 @@ impl VM<'_> {
         let parent = self.file_parent(parent)?;
         let attr = self.interns.get_str(name_id);
         Some(match parent.search_path {
-            None => Err(ExcType::cannot_import_name(attr, &parent.name, Some(&parent.origin))),
+            None => Err(cannot_import(attr, &parent.name, &parent.origin, parent.initializing)),
             Some(dirs) => {
                 let name = format!("{}.{attr}", parent.name);
+                let on_miss = OnMiss::CannotImport {
+                    origin: parent.origin,
+                    partial: parent.initializing,
+                };
                 match self.modules.get(&name, self.heap) {
                     Some(module) => Ok(CallResult::Value(module)),
-                    None => start_search(name, dirs, OnMiss::CannotImport { origin: parent.origin })
-                        .map(ImportProbe::suspend),
+                    None => start_search(name, dirs, on_miss).map(ImportProbe::suspend),
                 }
             }
         })
@@ -337,7 +344,8 @@ impl VM<'_> {
 
     /// `value` as a file module, with what an import of one of its submodules needs.
     fn file_parent(&self, value: &Value) -> Option<FileParent> {
-        let HeapData::Module(module) = self.heap.get(value.ref_id()?) else {
+        let id = value.ref_id()?;
+        let HeapData::Module(module) = self.heap.get(id) else {
             return None;
         };
         let namespace = module.namespace()?;
@@ -347,8 +355,10 @@ impl VM<'_> {
         let search_path = dict
             .get_by_str("__path__", self.heap, self.interns)
             .map(|path| self.search_path(path));
+        let name = module.name_str(self.interns);
         Some(FileParent {
-            name: module.name_str(self.interns).to_owned(),
+            initializing: self.modules.is_initializing(name, id),
+            name: name.to_owned(),
             origin: module.origin().unwrap_or_default().to_owned(),
             search_path,
         })
@@ -406,10 +416,19 @@ fn start_search(name: String, dirs: Vec<String>, on_miss: OnMiss) -> RunResult<I
 fn missed_import(name: &str, on_miss: OnMiss) -> RunError {
     match on_miss {
         OnMiss::ModuleNotFound => ExcType::module_not_found_error(name, None),
-        OnMiss::CannotImport { origin } => {
+        OnMiss::CannotImport { origin, partial } => {
             let (parent, attr) = name.rsplit_once('.').expect("a submodule name is dotted");
-            ExcType::cannot_import_name(attr, parent, Some(&origin))
+            cannot_import(attr, parent, &origin, partial)
         }
+    }
+}
+
+/// `from parent import attr` failing, noting a parent whose body is still running.
+fn cannot_import(attr: &str, parent: &str, origin: &str, partial: bool) -> RunError {
+    if partial {
+        ExcType::cannot_import_name_partial(attr, parent, origin)
+    } else {
+        ExcType::cannot_import_name(attr, parent, Some(origin))
     }
 }
 

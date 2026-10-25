@@ -111,7 +111,8 @@ The host's answer becomes the imported `module` object, with these differences f
     Wrap a class in `ClassType` to send it as a type.
 - Imports with more than 32 dotted components raise `SyntaxError`; `import a.b.c` has three.
 
-With no host to answer, `monty file.py` included, every unknown module raises `ModuleNotFoundError`.
+With no host to answer, `monty file.py` included, every unknown module moves on to [files](#modules-from-files);
+without a mount (`--mount` for the CLI) to serve them, it raises `ModuleNotFoundError`.
 
 ## Modules from files
 
@@ -124,8 +125,15 @@ Differences from CPython:
 
 - The working directory at the time of the `import` is the only search location.
     There is no `sys.path`, `PYTHONPATH`, `.pth` file or site-packages.
+- Bundled modules are never shadowed: a `json.py` in the working directory is not read by `import json`, where
+    CPython would import it.
+- An unreadable module file is skipped rather than raising `PermissionError`, so the import raises
+    `ModuleNotFoundError` when no later candidate exists.
 - The first import of a file module costs the host `import` call before the reads, and an import that neither the
     host nor a file answers costs the call and two reads; the host's `os` handler sees those reads.
+    Each call and read is one suspension against
+    [`max_suspensions`](resource_limits.md#suspensions): a top-level module file costs three, a package two, and a
+    submodule one or two.
 - A file module is cached for the session by its dotted name, but there is no `sys.modules` or `importlib`, so nothing
     clears the cache: a file edited after its first import is not read again, even in later feeds or after `os.chdir`,
     and later imports of the name bind the cached module without asking the host.
@@ -136,6 +144,7 @@ Differences from CPython:
     Directories without an `__init__.py` (namespace packages) are not found.
 - Module globals are `__name__`, `__file__`, `__package__` and, for a package, `__path__`; `__spec__`, `__loader__`,
     `__cached__`, `__builtins__` and `__doc__` are not defined.
+    `m.__dict__` and `vars(m)` raise `AttributeError`, and `dir(m)` is unsupported.
 - Module code looks names up in its globals and the builtins, never on the host: calling a
     [host function](../host-functions.md) by name raises `NameError` unless the importer binds it on the module first,
     as in `helpers.fetch = fetch`.

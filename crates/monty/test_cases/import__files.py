@@ -28,6 +28,11 @@
 (root / 'redirect' / '__init__.py').write_text(f'__path__ = ({str(root / "elsewhere")!r},)\n')
 (root / 'mixed').mkdir()
 (root / 'mixed' / '__init__.py').write_text(f'__path__ = [1, None, {str(root / "elsewhere")!r}]\n')
+(root / 'circ_a.py').write_text('import circ_b\nlate = 1\n')
+(root / 'circ_b.py').write_text('try:\n    from circ_a import late\nexcept ImportError as e:\n    msg = str(e)\n')
+(root / 'cpkg').mkdir()
+(root / 'cpkg' / '__init__.py').write_text('from cpkg import mod\nlate = 1\n')
+(root / 'cpkg' / 'mod.py').write_text('try:\n    from cpkg import late\nexcept ImportError as e:\n    msg = str(e)\n')
 
 # === Modules ===
 import foo
@@ -65,6 +70,20 @@ assert counter.items == [0]
 import a
 
 assert (a.last, a.b.has_last) == (1, False)
+
+# === `from` a partly initialised module names the circular import ===
+import circ_a
+
+assert circ_a.circ_b.msg == (
+    "cannot import name 'late' from partially initialized module 'circ_a' "
+    f'(most likely due to a circular import) ({root / "circ_a.py"})'
+)
+import cpkg
+
+assert cpkg.mod.msg == (
+    "cannot import name 'late' from partially initialized module 'cpkg' "
+    f'(most likely due to a circular import) ({root / "cpkg" / "__init__.py"})'
+)
 
 # === A raising module is not cached ===
 try:

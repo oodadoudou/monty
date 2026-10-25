@@ -284,8 +284,8 @@ pub enum TurnEvent {
     /// no-handler default.
     ///
     /// Answer host imports from the caller's modules before other handlers.
-    /// [`OsFunctionCall::Import`] takes a module value; `NotFound` / `NotHandled` raise
-    /// `ModuleNotFoundError`. [`OsFunctionCall::ImportStubs`] takes a dict of dotted
+    /// [`OsFunctionCall::Import`] takes a module value; `NotFound` / `NotHandled` read the
+    /// module's `.py` file instead. [`OsFunctionCall::ImportStubs`] takes a dict of dotted
     /// module paths to `.pyi` source or `None`, or `NotHandled` for no stubs.
     OsCall {
         function_name: String,
@@ -339,7 +339,7 @@ pub enum ResumeValue {
     /// other tasks; resolve later via [`Checkout::resume_futures`].
     Future,
     /// No handler exists for the called name — the sandbox raises
-    /// `NameError` (`ModuleNotFoundError` for an `import`).
+    /// `NameError` (for an `import`, it reads the module's `.py` file).
     NotFound,
     /// No handler accepted this OS call — the sandbox raises the call's own
     /// no-handler default (`PermissionError` naming the path for filesystem

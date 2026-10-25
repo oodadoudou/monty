@@ -187,6 +187,9 @@ indistinguishable from a stack overflow.
     external function calls, host-object method calls, attribute lookups and
     construction, OS calls, name lookups, and each `ResolveFutures` round trip
     (a partial future resolution that re-suspends counts again).
+    An `import` of a name the host does not provide counts the `import` call and each file it reads, so a session
+    that imports many [modules from files](modules.md#modules-from-files), or retries a missing one, needs a
+    larger budget.
 - It defaults to 1000 and cannot be disabled (like `max_recursion_depth`):
     omitting it, or passing `None`, keeps the default; set a larger number
     for sessions that legitimately make more host calls.

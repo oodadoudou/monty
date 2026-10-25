@@ -663,7 +663,7 @@ class TurnAnswerer {
   }
 
   /**
-   * Returns the host module, or not-found for the sandbox to raise `ModuleNotFoundError`.
+   * Returns the host module, or not-found for the sandbox to read the module's `.py` file.
    */
   private async answerImport(call: OsCallTurn, onPrint: PrintCallback): Promise<object> {
     const [args] = restoreCallArgs(call, this.instances)

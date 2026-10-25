@@ -51,6 +51,13 @@ impl ModuleCache {
         }
     }
 
+    /// Whether `module`, cached as `name`, is still running its body.
+    pub fn is_initializing(&self, name: &str, module: HeapId) -> bool {
+        self.0
+            .get(name)
+            .is_some_and(|cached| cached.module == module && cached.initializing)
+    }
+
     /// Marks `name` initialised once `module`'s body has returned.
     pub fn finish(&mut self, name: &str, module: HeapId) {
         if let Some(cached) = self.0.get_mut(name)

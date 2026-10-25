@@ -33,7 +33,7 @@ pub struct ExternalLookup<'a, 'py> {
 impl<'a, 'py> ExternalLookup<'a, 'py> {
     /// Binds the captured dicts (each `None` when the caller passed none, in
     /// which case every name resolves to `NameError` / `NotFound`, and every
-    /// import to `ModuleNotFoundError`).
+    /// import to `NotFound`, which reads the module's `.py` file).
     pub(crate) fn new(py: Python<'py>, names: &'py HostNames, instances: &'a InstanceStore) -> Self {
         Self {
             py,
@@ -300,8 +300,8 @@ impl<'a, 'py> ExternalLookup<'a, 'py> {
         }
     }
 
-    /// Answers `import <name>` with the module's value, `NotFound` (a
-    /// `ModuleNotFoundError`) when `external_modules` lacks it.
+    /// Answers `import <name>` with the module's value, `NotFound` (the
+    /// sandbox then reads the module's `.py` file) when `external_modules` lacks it.
     fn import_module(&self, args: &CallArgs) -> ExtFunctionResult {
         let Some(name) = import_name(args) else {
             return ExtFunctionResult::NotFound(IMPORT_CALL.to_owned());
