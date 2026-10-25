@@ -38,13 +38,13 @@ enum SearchEntry {
 /// The search path of a top-level import.
 const SEARCH_PATH: &[SearchEntry] = &[SearchEntry::Cwd];
 
-/// Which file of a module a probe reads.
+/// Which file of a module a probe reads; a package wins over a module of the same name, as in CPython.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Candidate {
-    /// `<dir>/<name>.py`
-    Module,
     /// `<dir>/<name>/__init__.py`, a package.
     Package,
+    /// `<dir>/<name>.py`
+    Module,
 }
 
 /// What an import raises when no directory has its file.
@@ -107,16 +107,16 @@ impl ImportProbe {
     // trips per directory is too slow for a package that imports hundreds of modules.
     fn advance(&mut self) -> bool {
         match self.candidate {
-            Candidate::Module => {
-                self.candidate = Candidate::Package;
-                true
-            }
-            Candidate::Package if self.dir_index + 1 < self.dirs.len() => {
-                self.dir_index += 1;
+            Candidate::Package => {
                 self.candidate = Candidate::Module;
                 true
             }
-            Candidate::Package => false,
+            Candidate::Module if self.dir_index + 1 < self.dirs.len() => {
+                self.dir_index += 1;
+                self.candidate = Candidate::Package;
+                true
+            }
+            Candidate::Module => false,
         }
     }
 }
@@ -361,9 +361,16 @@ impl VM<'_> {
             Some(HeapData::Tuple(tuple)) => tuple.as_slice(),
             _ => return Vec::new(),
         };
+        // Matched directly: `to_str_heap` would format a discarded `TypeError` per non-string.
         dirs.iter()
-            .filter_map(|dir| dir.to_str_heap(self.heap, self.interns).ok())
-            .map(str::to_owned)
+            .filter_map(|dir| match dir {
+                Value::InternString(id) => Some(self.interns.get_str(*id).to_owned()),
+                Value::Ref(id) => match self.heap.get(*id) {
+                    HeapData::Str(s) => Some(s.as_str().to_owned()),
+                    _ => None,
+                },
+                _ => None,
+            })
             .collect()
     }
 
@@ -389,7 +396,7 @@ fn start_search(name: String, dirs: Vec<String>, on_miss: OnMiss) -> RunResult<I
             name,
             dirs,
             dir_index: 0,
-            candidate: Candidate::Module,
+            candidate: Candidate::Package,
             on_miss,
         })
     }

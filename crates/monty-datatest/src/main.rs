@@ -2515,10 +2515,11 @@ fn try_run_cpython_test(
     } else {
         None
     };
+    // `root` also goes first on `sys.path`, as Monty imports from its cwd `/mnt`.
     let mount_root_setup: Option<String> = mount_tmpdir.as_ref().map(|tmpdir| {
         let tmpdir_path = tmpdir.path().to_string_lossy().to_string();
         format!(
-            "from pathlib import Path as _Path; root = _Path('{}')",
+            "from pathlib import Path as _Path; import sys as _sys; root = _Path('{}'); _sys.path.insert(0, str(root))",
             tmpdir_path.replace('\\', "\\\\").replace('\'', "\\'")
         )
     });
@@ -2663,6 +2664,9 @@ fn try_run_cpython_test(
             CpythonResult::NoValue // NoException expectation - success
         }
     });
+    if let Some(tmpdir) = &mount_tmpdir {
+        Python::attach(|py| forget_mount_imports(py, tmpdir.path()));
+    }
 
     watchdog.check(&test_name)?;
     match result {
@@ -2681,6 +2685,26 @@ fn try_run_cpython_test(
         CpythonResult::NoValue => Ok(()),
         CpythonResult::Failed(failure) => Err(failure),
     }
+}
+
+/// Undoes a `mount-fs` case's imports in the shared interpreter: takes `root`
+/// off `sys.path` and evicts the modules loaded from it, so the next case
+/// (with its own `root`) imports its own files.
+fn forget_mount_imports(py: Python<'_>, root: &Path) {
+    let code = c"
+import sys
+root = str(root)
+if root in sys.path:
+    sys.path.remove(root)
+sys.path_importer_cache.pop(root, None)
+for name, module in list(sys.modules.items()):
+    if (getattr(module, '__file__', None) or '').startswith(root):
+        del sys.modules[name]
+";
+    let locals = PyDict::new(py);
+    locals.set_item("root", root).expect("Failed to pass the mount root");
+    py.run(code, None, Some(&locals))
+        .expect("Failed to forget the mount-fs imports");
 }
 
 /// Format a CPython exception into the expected format.

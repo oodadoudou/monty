@@ -115,7 +115,7 @@ With no host to answer, `monty file.py` included, every unknown module raises `M
 
 ## Modules from files
 
-An `import` of a top-level name the host has no module for reads `<cwd>/name.py`, then `<cwd>/name/__init__.py`, and
+An `import` of a top-level name the host has no module for reads `<cwd>/name/__init__.py`, then `<cwd>/name.py`, and
 runs the first it finds as the module.
 The reads are `Path.read_text` OS calls, served exactly as `open()` is: by a mount or the host's `os` handler.
 `FileNotFoundError`, `NotADirectoryError`, `IsADirectoryError` and `PermissionError` (including the answer outside
