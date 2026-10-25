@@ -48,7 +48,7 @@ fn import_error(code: &str, module: &str, value: MontyObject) -> String {
 fn try_answer_import(progress: RunProgress, module: &str, value: MontyObject) -> Result<RunProgress, MontyException> {
     let call = progress.into_os_call().unwrap();
     assert_eq!(call.function_call.name(), IMPORT_CALL);
-    assert!(matches!(&call.function_call, OsFunctionCall::Import(name) if name == module));
+    assert!(matches!(&call.function_call, OsFunctionCall::Import(args) if args.module == module));
     assert!(!call.allow_eager_await);
     call.resume(value, PrintWriter::Stdout)
 }
@@ -169,15 +169,13 @@ fn a_missing_name_is_an_import_error_naming_the_module() {
     "#);
 }
 
-/// `not_found`, and a host with no handler at all, both raise `ModuleNotFoundError`
-/// once the import reads no file for the module either (see `file_import.rs`).
+/// `not_found`, and a host with no handler at all, both raise `ModuleNotFoundError`.
 #[test]
 fn a_not_found_answer_is_a_module_not_found_error() {
     let call = start("import nope").into_os_call().unwrap();
-    let progress = call
+    let err = call
         .resume(ExtFunctionResult::NotFound(IMPORT_CALL.to_owned()), PrintWriter::Stdout)
-        .unwrap();
-    let err = read_no_files(progress).unwrap_err();
+        .unwrap_err();
     assert_snapshot!(err.to_string(), @r#"
     Traceback (most recent call last):
       File "test.py", line 1, in <module>
@@ -186,26 +184,15 @@ fn a_not_found_answer_is_a_module_not_found_error() {
     "#);
 
     let call = start("import nope").into_os_call().unwrap();
-    let progress = call
+    let err = call
         .resume_with(PrintWriter::Stdout, |call| call.no_handler_result())
-        .unwrap();
-    let err = read_no_files(progress).unwrap_err();
+        .unwrap_err();
     assert_snapshot!(err.to_string(), @r#"
     Traceback (most recent call last):
       File "test.py", line 1, in <module>
         import nope
     ModuleNotFoundError: No module named 'nope'
     "#);
-}
-
-/// Answers each read of a module's candidate files as missing, with the error that follows.
-fn read_no_files(mut progress: RunProgress) -> Result<RunProgress, MontyException> {
-    while let RunProgress::OsCall(call) = progress {
-        assert!(matches!(call.function_call, OsFunctionCall::ReadText(_)));
-        let missing = MontyException::new(ExcType::FileNotFoundError, None);
-        progress = call.resume(ExtFunctionResult::Error(missing), PrintWriter::Stdout)?;
-    }
-    Ok(progress)
 }
 
 #[test]
@@ -247,7 +234,7 @@ fn a_repl_import_suspends_and_the_module_persists() {
     else {
         panic!("expected the import to suspend");
     };
-    assert!(matches!(&call.function_call, OsFunctionCall::Import(name) if name == "tools"));
+    assert!(matches!(&call.function_call, OsFunctionCall::Import(args) if args.module == "tools"));
     let module = host_module("tools", 1, vec![("x", MontyObject::int(2))]);
     let ReplProgress::Complete { repl, .. } = call.resume(module, PrintWriter::Stdout).unwrap() else {
         panic!("expected the snippet to complete");

@@ -40,6 +40,7 @@ mod common;
 mod direct;
 mod dispatch;
 mod error;
+mod import;
 mod mount_mode;
 mod mount_table;
 mod overlay;

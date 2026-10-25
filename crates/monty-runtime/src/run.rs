@@ -687,11 +687,20 @@ impl HostOs {
     }
 
     /// Waits for system sleeps, enforcing `--max-sleep` again in case the sandbox did not.
-    /// Other calls go to the mounts, transferring write payloads without copying.
+    /// Imports search the mounts for the module's file; other calls go to the
+    /// mounts, transferring write payloads without copying.
     fn handle_os_call(&mut self, call: OsFunctionCall) -> ExtFunctionResult {
         if let OsFunctionCall::SystemSleep(delay) | OsFunctionCall::AsyncSystemSleep(delay) = call {
             thread::sleep(delay.min(self.max_sleep));
             return MontyObject::none().into();
+        }
+        // The CLI has no host modules: an import is a file on the mounts or nothing.
+        if let OsFunctionCall::Import(args) = &call {
+            return self
+                .mounts
+                .as_mut()
+                .and_then(|mounts| mounts.find_module(args))
+                .unwrap_or_else(|| call.no_handler_result());
         }
         match self.mounts.as_mut() {
             Some(mounts) => match mounts.handle_os_call(call) {

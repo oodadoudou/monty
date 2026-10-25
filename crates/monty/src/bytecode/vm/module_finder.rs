@@ -1,22 +1,22 @@
 //! Imports of modules from `.py` files.
 //!
-//! A top-level import that is neither bundled nor cached asks the host's
-//! `import` call first, as CPython checks built-in modules before `sys.path`.
-//! Only when the host has no such module does it read candidate files, one
-//! `Path.read_text` OS call at a time, so the host's ordinary filesystem
-//! handling (mounts, overlays, a custom `os` handler) decides what `import`
-//! can read, exactly as for `open()`. The first file found is compiled and run
-//! as the module. [`ImportProbe`] carries the search across those suspensions.
+//! An import the sandbox neither bundles nor caches is one `import` OS call
+//! carrying the module's dotted name and the directories its file may be in:
+//! the working directory for a top-level name, the package's `__path__` for a
+//! submodule. The host does the whole search, checking its own modules first
+//! as CPython checks built-in modules before `sys.path`, and answers with a
+//! host module, the [`ModuleFile`] it found, or not-found. A found file is
+//! compiled and run here as the module, so each module costs one round trip.
 
 use std::sync::Arc;
 
-use monty_types::{ExcType, MontyObject, MontyPath, OsFunctionCall};
+use monty_types::{ExcType, ExtFunctionResult, ImportArgs, ModuleFile, OsFunctionCall};
 
 use super::{FrameExit, FrameNamespace, VM, namespace::FrameGlobals};
 use crate::{
     builtins::eval_exec::{SnippetSource, compile_and_push},
     bytecode::CallResult,
-    exception_private::{ExcTypeExt, RunError, RunResult, SimpleException},
+    exception_private::{ExcTypeExt, ExceptionRaise, RunError, RunResult, SimpleException},
     heap::{DropWithContext, HeapData, HeapId, HeapReadOutput},
     intern::StringId,
     os_dispatch::PendingEffect,
@@ -38,16 +38,7 @@ enum SearchEntry {
 /// The search path of a top-level import.
 const SEARCH_PATH: &[SearchEntry] = &[SearchEntry::Cwd];
 
-/// Which file of a module a probe reads; a package wins over a module of the same name, as in CPython.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-enum Candidate {
-    /// `<dir>/<name>/__init__.py`, a package.
-    Package,
-    /// `<dir>/<name>.py`
-    Module,
-}
-
-/// What an import raises when no directory has its file.
+/// What an import raises when the host has no module.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 enum OnMiss {
     /// `import name` and `import pkg.sub` raise `ModuleNotFoundError`.
@@ -61,64 +52,33 @@ enum OnMiss {
     },
 }
 
-/// A file import in progress: the pending effect of each `Path.read_text` probe.
+/// An `import` call in flight, armed as its pending effect: a submodule's
+/// suspended instruction does not name the module, and a miss's error depends
+/// on the statement.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct ImportProbe {
+pub(crate) struct PendingImport {
     /// The fully-qualified dotted module name, e.g. `pkg.sub`.
     name: String,
-    /// Directories to search, in order.
-    dirs: Vec<String>,
-    /// The directory in `dirs` this probe reads from.
-    dir_index: usize,
-    candidate: Candidate,
     on_miss: OnMiss,
 }
 
-impl ImportProbe {
-    /// Suspends to read this probe's candidate file, the probe armed for the reply.
-    fn suspend(self) -> CallResult {
-        CallResult::OsCallWithEffect {
-            call: self.call(),
-            effect: PendingEffect::Import(self),
+impl PendingImport {
+    /// A top-level `import name`, which raises `ModuleNotFoundError` on a miss.
+    pub(crate) fn top_level(name: String) -> Self {
+        Self {
+            name,
+            on_miss: OnMiss::ModuleNotFound,
         }
     }
 
-    /// The OS call that reads this probe's candidate file.
-    fn call(&self) -> OsFunctionCall {
-        OsFunctionCall::ReadText(MontyPath::new(self.path()))
-    }
-
-    /// The candidate file's virtual path.
-    fn path(&self) -> String {
-        let leaf = self.name.rsplit_once('.').map_or(self.name.as_str(), |(_, leaf)| leaf);
-        let file = match self.candidate {
-            Candidate::Module => format!("{leaf}.py"),
-            Candidate::Package => format!("{leaf}/__init__.py"),
-        };
-        posix_join(&self.dirs[self.dir_index], &file)
-    }
-
-    /// The package directory a found `__init__.py` makes `__path__`.
-    fn package_dir(&self) -> Option<String> {
-        let path = self.path();
-        (self.candidate == Candidate::Package).then(|| path.trim_end_matches("/__init__.py").to_owned())
-    }
-
-    /// Moves on to the next candidate after a miss; `false` once every candidate is read.
-    // TODO(site-packages): batch the candidates into one host call; two round
-    // trips per directory is too slow for a package that imports hundreds of modules.
-    fn advance(&mut self) -> bool {
-        match self.candidate {
-            Candidate::Package => {
-                self.candidate = Candidate::Module;
-                true
-            }
-            Candidate::Module if self.dir_index + 1 < self.dirs.len() => {
-                self.dir_index += 1;
-                self.candidate = Candidate::Package;
-                true
-            }
-            Candidate::Module => false,
+    /// Suspends with the `import` call for this module, searching `search_path`.
+    fn suspend(self, search_path: Vec<String>) -> CallResult {
+        CallResult::OsCallWithEffect {
+            call: OsFunctionCall::Import(ImportArgs {
+                module: self.name.clone(),
+                search_path,
+            }),
+            effect: PendingEffect::Import(self),
         }
     }
 }
@@ -135,44 +95,33 @@ struct FileParent {
 
 impl VM<'_> {
     /// `import name` for a name that is not bundled: the cached file module,
-    /// else the host's `import` call, which falls back to
-    /// [`resume_import_from_files`](Self::resume_import_from_files).
+    /// else the host's `import` call, searching [`SEARCH_PATH`].
     pub(super) fn import_top_level(&mut self, name: &str) -> CallResult {
-        match self.modules.get(name, self.heap) {
-            Some(module) => CallResult::Value(module),
-            None => CallResult::OsCall(OsFunctionCall::Import(name.to_owned())),
+        if let Some(module) = self.modules.get(name, self.heap) {
+            CallResult::Value(module)
+        } else {
+            let search_path = SEARCH_PATH
+                .iter()
+                .map(|entry| match entry {
+                    SearchEntry::Cwd => self.env.cwd.to_string(),
+                })
+                .collect();
+            PendingImport::top_level(name.to_owned()).suspend(search_path)
         }
     }
 
-    /// Resumes a top-level import the host has no module for: searches
-    /// [`SEARCH_PATH`] for its file, raising `ModuleNotFoundError` if there is none.
-    pub(crate) fn resume_import_from_files(&mut self, name: &str) -> Result<FrameExit, RunError> {
-        let dirs = SEARCH_PATH
-            .iter()
-            .map(|entry| match entry {
-                SearchEntry::Cwd => self.env.cwd.to_string(),
-            })
-            .collect();
-        match start_search(name.to_owned(), dirs, OnMiss::ModuleNotFound) {
-            Ok(probe) => {
-                let call = probe.call();
-                self.suspend_again(call, Some(PendingEffect::Import(probe)))
-            }
-            Err(err) => self.resume_with_exception(err),
-        }
-    }
-
-    /// `import pkg.sub` past a file module: the cached submodule, else a search
-    /// of the package's `__path__`. `None` when `parent` is not a file module.
+    /// `import pkg.sub` past a file module: the cached submodule, else the
+    /// host's `import` call searching the package's `__path__`. `None` when
+    /// `parent` is not a file module.
     pub(super) fn import_file_submodule(&mut self, parent: &Value, path_id: StringId) -> Option<RunResult<CallResult>> {
         let parent = self.file_parent(parent)?;
         let name = self.interns.get_str(path_id);
         Some(match parent.search_path {
             None => Err(ExcType::module_not_found_error(name, Some(&parent.name))),
-            Some(dirs) => match self.modules.get(name, self.heap) {
-                Some(module) => Ok(CallResult::Value(module)),
-                None => start_search(name.to_owned(), dirs, OnMiss::ModuleNotFound).map(ImportProbe::suspend),
-            },
+            Some(dirs) => Ok(match self.modules.get(name, self.heap) {
+                Some(module) => CallResult::Value(module),
+                None => PendingImport::top_level(name.to_owned()).suspend(dirs),
+            }),
         })
     }
 
@@ -185,61 +134,67 @@ impl VM<'_> {
             None => Err(cannot_import(attr, &parent.name, &parent.origin, parent.initializing)),
             Some(dirs) => {
                 let name = format!("{}.{attr}", parent.name);
-                let on_miss = OnMiss::CannotImport {
-                    origin: parent.origin,
-                    partial: parent.initializing,
-                };
-                match self.modules.get(&name, self.heap) {
-                    Some(module) => Ok(CallResult::Value(module)),
-                    None => start_search(name, dirs, on_miss).map(ImportProbe::suspend),
-                }
+                Ok(if let Some(module) = self.modules.get(&name, self.heap) {
+                    CallResult::Value(module)
+                } else {
+                    let on_miss = OnMiss::CannotImport {
+                        origin: parent.origin,
+                        partial: parent.initializing,
+                    };
+                    PendingImport { name, on_miss }.suspend(dirs)
+                })
             }
         })
     }
 
-    /// Resumes a probe the host answered with the file's text: runs it as the module.
-    pub(super) fn resume_import_found(
-        &mut self,
-        probe: ImportProbe,
-        reply: &MontyObject,
-    ) -> Result<FrameExit, RunError> {
-        let Some(source) = reply.as_ref().as_str() else {
-            let msg = format!(
-                "invalid return type: Path.read_text for an import must return a str, not {}",
-                reply.as_ref().type_name()
-            );
-            return self.resume_with_exception(SimpleException::new_msg(ExcType::RuntimeError, msg).into());
-        };
-        let source = Arc::from(source);
-        // Compiling is execution: it counts against the time limits.
-        self.heap.tracker.on_execution_start();
-        let result = self.run_file_module(probe, &source);
-        self.heap.tracker.on_execution_stop();
-        match result {
-            Ok(()) => self.run_external(),
-            Err(err) => self.resume_with_exception(err),
-        }
-    }
-
-    /// Resumes a probe whose file is missing: reads the next candidate, or
-    /// misses the import once there is none.
-    pub(crate) fn resume_import_miss(&mut self, mut probe: ImportProbe) -> Result<FrameExit, RunError> {
-        if probe.advance() {
-            let call = probe.call();
-            self.suspend_again(call, Some(PendingEffect::Import(probe)))
-        } else {
-            self.resume_with_exception(missed_import(&probe.name, probe.on_miss))
-        }
-    }
-
-    /// Takes the armed import probe, if the paused OS call is one.
-    pub(crate) fn take_import_probe(&mut self) -> Option<ImportProbe> {
+    /// Takes the armed `import` call, if the paused OS call is one.
+    pub(crate) fn take_pending_import(&mut self) -> Option<PendingImport> {
         match self.pending_effect.take() {
-            Some(PendingEffect::Import(probe)) => Some(probe),
+            Some(PendingEffect::Import(pending)) => Some(pending),
             other => {
                 self.pending_effect = other;
                 None
             }
+        }
+    }
+
+    /// Resumes an `import` call with the host's answer: a host module value,
+    /// the module's file to run, an exception raised without carets, or
+    /// not-found. Futures are rejected because imports cannot await.
+    pub(crate) fn resume_import(
+        &mut self,
+        pending: PendingImport,
+        result: ExtFunctionResult,
+        eager_call_id: Option<u32>,
+    ) -> Result<FrameExit, RunError> {
+        match (result, eager_call_id) {
+            (ExtFunctionResult::Return(obj), None) => self.resume(obj),
+            (ExtFunctionResult::ModuleFile(file), None) => self.resume_import_file(pending.name, file),
+            (ExtFunctionResult::Error(exc), None) => {
+                let mut raise = ExceptionRaise::from(exc);
+                raise.hide_caret = true;
+                self.resume_with_exception(RunError::Exc(raise))
+            }
+            (ExtFunctionResult::NotFound(_), None) => {
+                self.resume_with_exception(missed_import(&pending.name, pending.on_miss))
+            }
+            (ExtFunctionResult::Future(_), _) | (_, Some(_)) => {
+                let message = format!("import of '{}' cannot be answered with a future", pending.name);
+                self.resume_with_exception(SimpleException::new_msg(ExcType::RuntimeError, message).into())
+            }
+        }
+    }
+
+    /// Runs the file the host found as the module `name`.
+    fn resume_import_file(&mut self, name: String, file: ModuleFile) -> Result<FrameExit, RunError> {
+        let source = Arc::from(file.source);
+        // Compiling is execution: it counts against the time limits.
+        self.heap.tracker.on_execution_start();
+        let result = self.run_file_module(name, &file.path, &source);
+        self.heap.tracker.on_execution_stop();
+        match result {
+            Ok(()) => self.run_external(),
+            Err(err) => self.resume_with_exception(err),
         }
     }
 
@@ -279,15 +234,14 @@ impl VM<'_> {
         }
     }
 
-    /// Runs `source` as the module `probe` found: caches the module, pushes it
-    /// as the import's result, then pushes its body's frame, which leaves it
-    /// there on return (see `CallFrame::is_initializer`).
-    fn run_file_module(&mut self, probe: ImportProbe, source: &Arc<str>) -> RunResult<()> {
-        let path = probe.path();
-        let namespace = self.module_namespace(&probe, &path);
-        let module = Module::file(probe.name.clone(), namespace, path.clone());
+    /// Runs `source`, read from `path`, as the module `name`: caches the module,
+    /// pushes it as the import's result, then pushes its body's frame, which
+    /// leaves it there on return (see `CallFrame::is_initializer`).
+    fn run_file_module(&mut self, name: String, path: &str, source: &Arc<str>) -> RunResult<()> {
+        let namespace = self.module_namespace(&name, path);
+        let module = Module::file(name.clone(), namespace, path.to_owned());
         let module_id = self.heap.allocate(HeapData::Module(Box::new(module)));
-        self.modules.insert(probe.name, module_id, self.heap);
+        self.modules.insert(name, module_id, self.heap);
         self.push(Value::Ref(module_id));
 
         self.heap.inc_ref(namespace);
@@ -297,7 +251,7 @@ impl VM<'_> {
         });
         // TODO(site-packages): reuse compiled code across sessions; a large
         // package otherwise recompiles every module in every session.
-        let kind = SnippetSource::File { path: &path };
+        let kind = SnippetSource::File { path };
         match compile_and_push(kind, source, SnippetNames::NameOverDict, frame_namespace, self) {
             Ok(_) => {
                 self.current_frame_mut().is_initializer = true;
@@ -312,16 +266,17 @@ impl VM<'_> {
     }
 
     /// A new module's globals: `__name__`, `__file__`, `__package__`, and
-    /// `__path__` for a package. Returns an owned reference.
-    fn module_namespace(&mut self, probe: &ImportProbe, path: &str) -> HeapId {
-        let package_dir = probe.package_dir();
-        let package = match (&package_dir, probe.name.rsplit_once('.')) {
-            (Some(_), _) => probe.name.as_str(),
+    /// `__path__` for a package, which a `path` ending in `/__init__.py` is.
+    /// Returns an owned reference.
+    fn module_namespace(&mut self, name: &str, path: &str) -> HeapId {
+        let package_dir = path.strip_suffix("/__init__.py");
+        let package = match (package_dir, name.rsplit_once('.')) {
+            (Some(_), _) => name,
             (None, Some((parent, _))) => parent,
             (None, None) => "",
         };
         let mut entries = vec![
-            ("__name__", allocate_string(probe.name.as_str(), self.heap)),
+            ("__name__", allocate_string(name, self.heap)),
             ("__file__", allocate_string(path, self.heap)),
             ("__package__", allocate_string(package, self.heap)),
         ];
@@ -364,7 +319,8 @@ impl VM<'_> {
         })
     }
 
-    /// A package's `__path__` (a list or tuple) as directories, skipping anything that is not a `str`.
+    /// A package's `__path__` (a list or tuple) as directories joined to the
+    /// working directory, skipping anything that is not a `str`.
     fn search_path(&self, path: &Value) -> Vec<String> {
         let dirs = match path.ref_id().map(|id| self.heap.get(id)) {
             Some(HeapData::List(list)) => list.as_slice(),
@@ -374,13 +330,14 @@ impl VM<'_> {
         // Matched directly: `to_str_heap` would format a discarded `TypeError` per non-string.
         dirs.iter()
             .filter_map(|dir| match dir {
-                Value::InternString(id) => Some(self.interns.get_str(*id).to_owned()),
+                Value::InternString(id) => Some(self.interns.get_str(*id)),
                 Value::Ref(id) => match self.heap.get(*id) {
-                    HeapData::Str(s) => Some(s.as_str().to_owned()),
+                    HeapData::Str(s) => Some(s.as_str()),
                     _ => None,
                 },
                 _ => None,
             })
+            .map(|dir| posix_join(&self.env.cwd, dir))
             .collect()
     }
 
@@ -397,22 +354,7 @@ impl VM<'_> {
     }
 }
 
-/// The first probe of a search of `dirs` for `name`'s file, or the miss when there are none.
-fn start_search(name: String, dirs: Vec<String>, on_miss: OnMiss) -> RunResult<ImportProbe> {
-    if dirs.is_empty() {
-        Err(missed_import(&name, on_miss))
-    } else {
-        Ok(ImportProbe {
-            name,
-            dirs,
-            dir_index: 0,
-            candidate: Candidate::Package,
-            on_miss,
-        })
-    }
-}
-
-/// The error for an import no directory has a file for.
+/// The error for an import the host has no module for.
 fn missed_import(name: &str, on_miss: OnMiss) -> RunError {
     match on_miss {
         OnMiss::ModuleNotFound => ExcType::module_not_found_error(name, None),
@@ -430,19 +372,4 @@ fn cannot_import(attr: &str, parent: &str, origin: &str, partial: bool) -> RunEr
     } else {
         ExcType::cannot_import_name(attr, parent, Some(origin))
     }
-}
-
-/// Whether the host's error answering a probe means its file is not there:
-/// missing, a directory in the way, or outside anything the host serves.
-pub(crate) fn is_missing_file(error: &RunError) -> bool {
-    matches!(
-        error,
-        RunError::Exc(raise) if matches!(
-            raise.exc.exc_type(),
-            ExcType::FileNotFoundError
-                | ExcType::NotADirectoryError
-                | ExcType::IsADirectoryError
-                | ExcType::PermissionError
-        )
-    )
 }

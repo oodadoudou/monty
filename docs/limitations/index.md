@@ -37,8 +37,8 @@ They exist for development and for agents debugging code that runs on Monty; mos
     format specs and nested replacement fields
 - `async` / `await`, and `asyncio.run` / `asyncio.gather` / `asyncio.sleep`
 - `import x`, `import x.y`, `from x import y, z as w`; a module the sandbox does not have is requested from the host,
-    see [modules.md](modules.md#host-modules), and only when the host has none is it read from a `.py` file in the
-    working directory, see [modules from files](modules.md#modules-from-files)
+    see [modules.md](modules.md#host-modules), which may answer with the module's `.py` file from the working
+    directory instead, see [modules from files](modules.md#modules-from-files)
 - Starred unpacking everywhere CPython allows it
 - Runtime generic aliases (`list[int]`) and `|` unions (`int | None`), see [typing.md](typing.md)
 

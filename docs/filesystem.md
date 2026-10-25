@@ -139,11 +139,11 @@ The divergences are in [`limitations/os.md`](limitations/os.md).
 
 ### Importing modules
 
-`import helpers` reads the package `helpers/__init__.py`, or else `helpers.py`, from the working directory when no
+`import helpers` runs the package `helpers/__init__.py`, or else `helpers.py`, from the working directory when no
 [host module](host-functions.md#importing-host-modules) of that name exists, so a module file in a mount imports
 directly.
-The reads go through the mounts and the `os` callback exactly as `open()` does, and each module that imports
-successfully runs once per session:
+The host reads each candidate itself, through the `os` callback first and the mounts when the callback declines it,
+so the whole search costs one round trip; each module that imports successfully runs once per session:
 
 === "Python"
 
@@ -277,9 +277,9 @@ Use host storage whose availability and side effects are acceptable for the work
 Operations no mount covers fall through to the `os=` handler, an [`OsHandler`][pydantic_monty.OsHandler].
 [Host module](host-functions.md#importing-host-modules) calls (`import` and `import_stubs`) use the checkout's
 `external_modules` and never reach this handler.
-An import of a module the checkout does not provide reaches it as `Path.read_text` of `<cwd>/name/__init__.py` and
-`<cwd>/name.py` (see [importing modules](#importing-modules)); answer a file you do not serve with
-`FileNotFoundError` or `NOT_HANDLED`.
+An import of a module the checkout does not provide reaches it first, before the mounts, as `Path.read_text` of
+`<cwd>/name/__init__.py` and `<cwd>/name.py` (see [importing modules](#importing-modules)): return the source of a
+file you serve, and answer one you do not with `NOT_HANDLED` (the mounts are read next) or `FileNotFoundError`.
 It is called with keyword arguments, `name`, `args`, `kwargs` and `is_async`, and its return value is handed back to the sandbox.
 Absorb the arguments you do not use with `**_future_kwargs`, so a later version can pass more:
 

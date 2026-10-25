@@ -916,7 +916,9 @@ fn load_restores_a_suspended_import() {
         panic!("expected the re-announced import");
     };
     let call_id = call.call_id;
-    assert!(matches!(call.call, Some(pb::os_call::Call::Import(pb::os_call::Import { module })) if module == "tools"));
+    assert!(
+        matches!(call.call, Some(pb::os_call::Call::Import(pb::os_call::Import { module, .. })) if module == "tools")
+    );
 
     let tools = MontyObject::class_instance(
         MontyObject::class_type("tools", MontyUuid::from_u128(1), true, true, []),

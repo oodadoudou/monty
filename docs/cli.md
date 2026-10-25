@@ -68,6 +68,9 @@ The sandbox's [working directory](filesystem.md#working-directory) defaults to t
 picks another absolute virtual path.
 Only the file argument's name is used, so `monty ./scripts/run.py` and `monty /abs/run.py` both give
 `__file__ == '/data/run.py'`; the host directory never reaches the sandbox.
+An `import` of a module the sandbox does not bundle runs its `.py` file from the mounts, searched from the working
+directory (see [importing modules](filesystem.md#importing-modules)); without a mount it raises
+`ModuleNotFoundError`.
 
 ## The clock, sleeping and entropy
 

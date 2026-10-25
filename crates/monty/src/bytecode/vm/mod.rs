@@ -26,8 +26,7 @@ pub(crate) use call::CallResult;
 pub(crate) use collections::unpack_exact;
 use exceptions::CaughtException;
 pub(crate) use module_cache::ModuleCache;
-pub(crate) use module_finder::ImportProbe;
-use module_finder::is_missing_file;
+pub(crate) use module_finder::PendingImport;
 use monty_types::{InvalidInputError, MontyObject, MontyUuid, OsFunctionCall, PrintWriter, SourceRange};
 pub(crate) use namespace::{FrameNamespace, function_namespace};
 use recursion::frame_recursion_depth;
@@ -2116,8 +2115,6 @@ impl<'h> VM<'h> {
         // Pre-conversion effects reshape the raw host object; a post-conversion
         // effect waits in the slot until the value exists to apply it to.
         let obj = match self.pending_effect.take() {
-            // The file was found: run it as the module.
-            Some(PendingEffect::Import(probe)) => return self.resume_import_found(probe, &obj),
             Some(PendingEffect::Pre(effect)) => match effect.reshape(obj, self) {
                 Ok(Reshaped::Value(obj)) => obj,
                 Ok(Reshaped::Call { call, effect }) => return self.suspend_again(call, effect),
@@ -2357,8 +2354,6 @@ impl<'h> VM<'h> {
                     };
                 }
                 PendingEffect::Scan(effect) => effect.release(self.heap),
-                // A missing file moves the search on; any other error raises at the import.
-                PendingEffect::Import(probe) if is_missing_file(&error) => return self.resume_import_miss(probe),
                 PendingEffect::Import(_) => {}
                 // Hold no state or heap references — nothing to roll back.
                 PendingEffect::Pre(_)

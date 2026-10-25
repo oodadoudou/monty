@@ -30,7 +30,7 @@ use monty_types::{
 
 use crate::{
     args::{ArgValues, FromArgs, LaxBool},
-    bytecode::{CallResult, ImportProbe, VM},
+    bytecode::{CallResult, PendingImport, VM},
     defer_drop,
     exception_private::{ExcTypeExt, RunError, RunResult, SimpleException},
     heap::{ContainsHeap, DropWithContext, Heap, HeapData, HeapId},
@@ -77,9 +77,8 @@ pub(crate) enum PendingEffect {
     /// Builds a walk, scandir or glob result from a `Path.scan` reply — or
     /// from the `OSError` it answered with (see [`ScanEffect::absorbs`]).
     Scan(ScanEffect),
-    /// Runs the file a `Path.read_text` probe found as the imported module, or
-    /// moves the search on when the file is missing.
-    Import(ImportProbe),
+    /// Resolves an `import` call's answer: a module, a file to run, or a miss.
+    Import(PendingImport),
 }
 
 impl PendingEffect {

@@ -54,7 +54,7 @@ functions, nested `ExternalModule` values become importable submodules, and othe
 Its `id` identifies the module when it crosses back out of the sandbox.
 The optional `.pyi` source in `stubs` is requested at the first type-checked import and retained for the session.
 An import of a non-bundled name the mapping does not answer reads `<cwd>/name/__init__.py` (or `name.py`) through the
-feed's mounts and `os` handler and runs it as the module, once per session.
+`os` handler, then the feed's mounts, and runs it as the module, once per session.
 
 This requires the `pydantic-monty-runtime` package, which is generally
 installed as part of the `pydantic-monty` meta-package.

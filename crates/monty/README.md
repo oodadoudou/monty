@@ -122,13 +122,16 @@ Successful decoding is not evidence of authenticity or validity.
 
 Async host functions are supported too: `FunctionCall::resume_pending` continues execution with a pending future the sandboxed code can `await`; when all tasks are blocked, execution yields `RunProgress::ResolveFutures` for the host to supply results. When `FunctionCall::allow_eager_await` is true the call is awaited immediately and no other task can run, so a host that already has the result can pass it to `FunctionCall::resume_eager` and skip the `ResolveFutures` round trip. `OsCall::allow_eager_await` says the same of an `asyncio.sleep` the host has already waited out.
 
-Imports of unknown modules suspend with `OsFunctionCall::Import` and the top-level module name.
-The host's answer becomes the module; dotted imports read subsequent components as attributes of that value.
+Imports of unknown modules suspend with `OsFunctionCall::Import`, whose `ImportArgs` carry the dotted module name and
+its search path: the working directory for a top-level name, or a file package's `__path__` for its submodules.
+A returned value becomes the module; dotted imports read subsequent components as attributes of that value.
 Hosts usually return a host-backed class instance containing the module's attributes.
-`ExtFunctionResult::NotFound` (what `OsFunctionCall::no_handler_result` answers) instead reads `<cwd>/name/__init__.py`,
-then `<cwd>/name.py`, through `OsFunctionCall::ReadText` suspensions, and runs the first file found as the
-module, cached for the session; with neither, or running without a host, the import raises `ModuleNotFoundError`.
-An exception the host raises for the import is raised as it is.
+A host with no such module can answer `ExtFunctionResult::ModuleFile` with the module's `.py` file instead:
+`find_module_file` searches `ImportArgs::candidates` with a read function the host supplies, and
+`MountTable::find_module` searches the mounts.
+The sandbox runs the file as the module and caches it for the session.
+`ExtFunctionResult::NotFound` (what `OsFunctionCall::no_handler_result` answers), or running without a host, raises
+`ModuleNotFoundError`; an exception the host raises for the import is raised as it is.
 The worker requests module type stubs through `OsFunctionCall::ImportStubs`; the interpreter never raises it.
 
 ## Other pieces

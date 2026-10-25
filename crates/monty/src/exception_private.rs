@@ -1673,6 +1673,17 @@ pub(crate) trait ExcTypeExt: Sized {
         import_error_without_caret(format!("cannot import name '{name}' from '{module_name}' ({origin})"))
     }
 
+    /// The `RuntimeError` for a host answering anything but an `import` call
+    /// with a module file.
+    #[must_use]
+    fn module_file_for_non_import() -> RunError {
+        SimpleException::new_msg(
+            ExcType::RuntimeError,
+            "only an import can be answered with a module file",
+        )
+        .into()
+    }
+
     /// The `ImportError` for `from module import name` while `module`'s body is
     /// still running, CPython's hint at a circular import.
     #[must_use]

@@ -682,6 +682,9 @@ impl Child {
             ExtFunctionResult::Future(_) => {
                 return protocol_violation("import_stubs cannot be answered with a future");
             }
+            ExtFunctionResult::ModuleFile(_) => {
+                return protocol_violation("import_stubs cannot be answered with a module file");
+            }
             ExtFunctionResult::Error(exc) => {
                 let SessionState::AwaitingStubs(pending) =
                     mem::replace(&mut self.state, SessionState::Configured(None))

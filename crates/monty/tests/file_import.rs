@@ -1,15 +1,16 @@
-//! Tests for importing modules from `.py` files: an import the host has no
-//! module for reads candidate files with `Path.read_text` OS calls, runs the
-//! first it finds as the module, and caches the module for the session.
+//! Tests for importing modules from `.py` files: an import the sandbox does
+//! not bundle or cache is one `import` call carrying where its file may be; a
+//! host with no module of that name answers with the file it found, which runs
+//! as the module and is cached for the session.
 //!
-//! These cover the host protocol: which reads happen, unusual answers, dumps
-//! and REPL feeds. Python semantics, compared with CPython, are in
+//! These cover the host protocol: which imports are asked, unusual answers,
+//! dumps and REPL feeds. Python semantics, compared with CPython, are in
 //! `test_cases/import__files.py`.
 
 use monty::{Dump, MontyRepl, MontyRun, ReplOsCall, ReplProgress, Session, SessionRef, dump};
 use monty_types::{
-    CompileOptions, ExcType, ExtFunctionResult, IMPORT_CALL, MontyException, MontyObject, MontyUuid, OsFunctionCall,
-    PrintWriter, ResourceTracker,
+    CompileOptions, ExcType, ExtFunctionResult, IMPORT_CALL, ImportArgs, ModuleFile, ModuleRead, MontyException,
+    MontyObject, MontyUuid, OsFunctionCall, PrintWriter, ResourceTracker, find_module_file,
 };
 
 /// The files a test's host serves, by virtual path.
@@ -22,20 +23,19 @@ fn repl() -> MontyRepl {
     repl
 }
 
-/// Feeds `code`, answering reads from `files` and every other OS call (host
-/// imports included) as unhandled. The session is dumped and reloaded at each
-/// suspension. Returns the session with the result, or the exception's last
-/// traceback line.
+/// Feeds `code`, answering imports with a file from `files` and every other OS
+/// call as unhandled. The session is dumped and reloaded at each suspension.
+/// Returns the session with the result, or the exception's last traceback line.
 fn feed(repl: MontyRepl, code: &str, files: Files<'_>) -> (MontyRepl, Result<MontyObject, String>) {
     feed_logged(repl, code, files, &mut Vec::new())
 }
 
-/// [`feed`], recording the path of every file read in `reads`.
+/// [`feed`], recording the arguments of every `import` call in `imports`.
 fn feed_logged(
     repl: MontyRepl,
     code: &str,
     files: Files<'_>,
-    reads: &mut Vec<String>,
+    imports: &mut Vec<ImportArgs>,
 ) -> (MontyRepl, Result<MontyObject, String>) {
     let mut progress = repl.feed_start(code, Vec::<(String, MontyObject)>::new(), PrintWriter::Stdout);
     loop {
@@ -43,9 +43,9 @@ fn feed_logged(
             Ok(ReplProgress::Complete { repl, value }) => return (repl, Ok(value)),
             Ok(ReplProgress::OsCall(call)) => {
                 let result = match &call.function_call {
-                    OsFunctionCall::ReadText(path) => {
-                        reads.push(path.as_str().to_owned());
-                        read(files, path.as_str())
+                    OsFunctionCall::Import(args) => {
+                        imports.push(args.clone());
+                        answer_import(files, args)
                     }
                     other => other.no_handler_result(),
                 };
@@ -63,15 +63,13 @@ fn feed_logged(
     }
 }
 
-/// The host's answer to reading `path`.
-fn read(files: Files<'_>, path: &str) -> ExtFunctionResult {
-    match files.iter().find(|(file, _)| *file == path) {
-        Some((_, text)) => MontyObject::string(*text).into(),
-        None => ExtFunctionResult::Error(MontyException::new(
-            ExcType::FileNotFoundError,
-            Some(format!("[Errno 2] No such file or directory: '{path}'")),
-        )),
-    }
+/// A host with no host modules: the module's file from `files`, else not-found.
+fn answer_import(files: Files<'_>, args: &ImportArgs) -> ExtFunctionResult {
+    find_module_file(args, |path| match files.iter().find(|(file, _)| *file == path) {
+        Some((_, text)) => ModuleRead::Text((*text).to_owned()),
+        None => ModuleRead::Missing,
+    })
+    .unwrap_or_else(|| ExtFunctionResult::NotFound(IMPORT_CALL.to_owned()))
 }
 
 /// Dumps a suspended feed and loads it back, releasing the original.
@@ -89,32 +87,39 @@ fn eval(code: &str, files: Files<'_>) -> MontyObject {
     feed(repl(), code, files).1.unwrap()
 }
 
-/// Feeds `code` to a fresh session, answers its host import `not_found`, and
-/// returns the first read that follows.
-fn first_read(code: &str) -> ReplOsCall {
+/// The `(module, search path)` of each logged `import` call.
+fn asked(imports: &[ImportArgs]) -> Vec<(&str, Vec<&str>)> {
+    imports
+        .iter()
+        .map(|args| {
+            (
+                args.module.as_str(),
+                args.search_path.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect()
+}
+
+/// Feeds `code` to a fresh session and returns its first `import` call.
+fn first_import(code: &str) -> ReplOsCall {
     let progress = repl()
         .feed_start(code, Vec::<(String, MontyObject)>::new(), PrintWriter::Stdout)
         .unwrap();
     let ReplProgress::OsCall(call) = progress else {
-        panic!("expected the host import");
+        panic!("expected an import");
     };
     assert_eq!(call.function_call.name(), IMPORT_CALL);
-    let not_found = ExtFunctionResult::NotFound(IMPORT_CALL.to_owned());
-    let ReplProgress::OsCall(call) = call.resume(not_found, PrintWriter::Stdout).unwrap() else {
-        panic!("expected a read");
-    };
-    assert!(matches!(call.function_call, OsFunctionCall::ReadText(_)));
     call
 }
 
-/// The full traceback of the exception `code` raises, answering its reads from `files`.
+/// The full traceback of the exception `code` raises, answering its imports from `files`.
 fn traceback(code: &str, files: Files<'_>) -> String {
-    let mut call = first_read(code);
+    let mut call = first_import(code);
     loop {
-        let OsFunctionCall::ReadText(path) = &call.function_call else {
-            panic!("expected only reads, got {}", call.function_call.name())
+        let OsFunctionCall::Import(args) = &call.function_call else {
+            panic!("expected only imports, got {}", call.function_call.name())
         };
-        let result = read(files, path.as_str());
+        let result = answer_import(files, args);
         match call.resume(result, PrintWriter::Stdout) {
             Ok(ReplProgress::OsCall(next)) => call = next,
             Ok(_) => panic!("expected the import to raise"),
@@ -129,26 +134,34 @@ fn resume_err(call: ReplOsCall, result: impl Into<ExtFunctionResult>) -> String 
     err.error.to_string().lines().last().unwrap().to_owned()
 }
 
+/// The answer that the module's file at `path` holds `source`.
+fn module_file(path: &str, source: &str) -> ExtFunctionResult {
+    ExtFunctionResult::ModuleFile(ModuleFile {
+        path: path.to_owned(),
+        source: source.to_owned(),
+    })
+}
+
 const FOO: &str = "x = 41\ndef f():\n    return x + 1\n";
 
 #[test]
 fn a_module_runs_once_per_session() {
     let files = &[("/proj/counter.py", "print('loading')\nitems = []\n")];
-    let mut reads = Vec::new();
+    let mut imports = Vec::new();
     let (repl, result) = feed_logged(
         repl(),
         "import counter\nimport counter as again\ncounter.items.append(1)\n(counter is again, again.items)",
         files,
-        &mut reads,
+        &mut imports,
     );
     assert_eq!(result.unwrap(), eval("(True, [1])", &[]));
-    assert_eq!(reads, ["/proj/counter/__init__.py", "/proj/counter.py"]);
+    assert_eq!(asked(&imports), [("counter", vec!["/proj"])]);
 
-    // the cache is session state: a later feed binds the same module, reading nothing
-    let mut reads = Vec::new();
-    let (_, result) = feed_logged(repl, "import counter\ncounter.items", files, &mut reads);
+    // the cache is session state: a later feed binds the same module, asking nothing
+    let mut imports = Vec::new();
+    let (_, result) = feed_logged(repl, "import counter\ncounter.items", files, &mut imports);
     assert_eq!(result.unwrap(), eval("[1]", &[]));
-    assert_eq!(reads, Vec::<String>::new());
+    assert_eq!(imports, []);
 }
 
 #[test]
@@ -160,33 +173,24 @@ fn the_cache_survives_an_idle_dump() {
     let Session::Idle(repl) = Dump::load(&bytes).unwrap().state else {
         panic!("dumped while idle");
     };
-    let mut reads = Vec::new();
-    let (_, result) = feed_logged(*repl, "import foo\nfoo.f()", files, &mut reads);
+    let mut imports = Vec::new();
+    let (_, result) = feed_logged(*repl, "import foo\nfoo.f()", files, &mut imports);
     assert_eq!(result.unwrap(), MontyObject::int(8));
-    assert_eq!(reads, Vec::<String>::new());
+    assert_eq!(imports, []);
 }
 
-/// The host is asked first; only a module it lacks is read from a file.
 #[test]
-fn a_module_the_host_lacks_is_read_from_a_file() {
-    let mut reads = Vec::new();
-    let (_, result) = feed_logged(repl(), "import tools", &[], &mut reads);
+fn a_missing_module_is_one_import_call() {
+    let mut imports = Vec::new();
+    let (_, result) = feed_logged(repl(), "import tools", &[], &mut imports);
     assert_eq!(result.unwrap_err(), "ModuleNotFoundError: No module named 'tools'");
-    assert_eq!(reads, ["/proj/tools/__init__.py", "/proj/tools.py"]);
+    assert_eq!(asked(&imports), [("tools", vec!["/proj"])]);
+}
 
-    // a host module shadows a file of the same name, which is never read
-    let progress = repl()
-        .feed_start(
-            "import tools
-tools.x",
-            Vec::<(String, MontyObject)>::new(),
-            PrintWriter::Stdout,
-        )
-        .unwrap();
-    let ReplProgress::OsCall(call) = progress else {
-        panic!("expected the host import");
-    };
-    assert!(matches!(&call.function_call, OsFunctionCall::Import(name) if name == "tools"));
+/// A host module answers the import call itself, so no file is used.
+#[test]
+fn a_host_module_shadows_a_file() {
+    let call = first_import("import tools\ntools.x");
     let module = MontyObject::module(
         "tools",
         MontyUuid::from_u128(1),
@@ -210,6 +214,47 @@ fn the_cwd_is_searched_when_the_import_runs() {
     assert_eq!(
         feed(repl, "import foo\nfoo.where", files).1.unwrap(),
         MontyObject::string("other")
+    );
+}
+
+/// Every submodule of a file package is its own import call, searching the
+/// package's `__path__`, whichever statement imports it.
+#[test]
+fn a_submodule_is_asked_with_the_package_path() {
+    let files = &[
+        ("/proj/pkg/__init__.py", ""),
+        ("/proj/pkg/sub.py", "value = 3\n"),
+        ("/proj/pkg/other.py", "value = 4\n"),
+        ("/proj/far/__init__.py", "__path__ = ['elsewhere']\n"),
+        ("/proj/elsewhere/mod.py", "value = 5\n"),
+    ];
+    let mut imports = Vec::new();
+    let code = "import pkg.sub\nfrom pkg import other\nimport far.mod\n(pkg.sub.value, other.value, far.mod.value)";
+    let (_, result) = feed_logged(repl(), code, files, &mut imports);
+    assert_eq!(result.unwrap(), eval("(3, 4, 5)", &[]));
+    assert_eq!(
+        asked(&imports),
+        [
+            ("pkg", vec!["/proj"]),
+            ("pkg.sub", vec!["/proj/pkg"]),
+            ("pkg.other", vec!["/proj/pkg"]),
+            ("far", vec!["/proj"]),
+            // a relative `__path__` entry is joined to the working directory
+            ("far.mod", vec!["/proj/elsewhere"]),
+        ]
+    );
+}
+
+#[test]
+fn a_missing_submodule_raises_by_statement() {
+    let files = &[("/proj/pkg/__init__.py", "")];
+    assert_eq!(
+        feed(repl(), "import pkg.nope", files).1.unwrap_err(),
+        "ModuleNotFoundError: No module named 'pkg.nope'"
+    );
+    assert_eq!(
+        feed(repl(), "from pkg import nope", files).1.unwrap_err(),
+        "ImportError: cannot import name 'nope' from 'pkg' (/proj/pkg/__init__.py)"
     );
 }
 
@@ -244,56 +289,59 @@ fn a_syntax_error_in_a_module_names_its_file() {
             ~
     SyntaxError: Expected an expression
     "#);
-    // nothing is cached: the next import reads the file again
-    let mut reads = Vec::new();
-    let (repl, _) = feed_logged(repl(), "import bad", files, &mut reads);
-    let _ = feed_logged(repl, "import bad", files, &mut reads);
-    assert_eq!(
-        reads,
-        [
-            "/proj/bad/__init__.py",
-            "/proj/bad.py",
-            "/proj/bad/__init__.py",
-            "/proj/bad.py"
-        ]
-    );
+    // nothing is cached: the next import asks for the file again
+    let mut imports = Vec::new();
+    let (repl, _) = feed_logged(repl(), "import bad", files, &mut imports);
+    let _ = feed_logged(repl, "import bad", files, &mut imports);
+    assert_eq!(asked(&imports), [("bad", vec!["/proj"]), ("bad", vec!["/proj"])]);
 }
 
 #[test]
-fn unusual_answers_to_a_read() {
-    // a handler that does not serve the read: the file is not there
-    let call = first_read("import foo");
-    assert!(matches!(&call.function_call, OsFunctionCall::ReadText(path) if path.as_str() == "/proj/foo/__init__.py"));
-    let ReplProgress::OsCall(next) = call
-        .resume(
-            ExtFunctionResult::NotFound("Path.read_text".to_owned()),
-            PrintWriter::Stdout,
-        )
-        .unwrap()
-    else {
-        panic!("expected the next read");
-    };
-    assert!(matches!(&next.function_call, OsFunctionCall::ReadText(path) if path.as_str() == "/proj/foo.py"));
-
-    let call = first_read("import foo");
+fn unusual_answers() {
+    let call = first_import("import foo");
     let call_id = call.call_id;
     assert_eq!(
         resume_err(call, ExtFunctionResult::Future(call_id)),
-        "RuntimeError: import cannot be answered with a future"
-    );
-    assert_eq!(
-        resume_err(first_read("import foo"), MontyObject::bytes(b"x = 1".to_vec())),
-        "RuntimeError: invalid return type: Path.read_text for an import must return a str, not bytes"
+        "RuntimeError: import of 'foo' cannot be answered with a future"
     );
     let unreadable = MontyException::new(ExcType::OSError, Some("[Errno 5] Input/output error".to_owned()));
     assert_eq!(
-        resume_err(first_read("import foo"), ExtFunctionResult::Error(unreadable)),
+        resume_err(first_import("import foo"), ExtFunctionResult::Error(unreadable)),
         "OSError: [Errno 5] Input/output error"
+    );
+
+    // a module file answers only an import
+    let progress = repl()
+        .feed_start(
+            "import os\nos.getenv('X')",
+            Vec::<(String, MontyObject)>::new(),
+            PrintWriter::Stdout,
+        )
+        .unwrap();
+    let ReplProgress::OsCall(getenv) = progress else {
+        panic!("expected os.getenv to suspend");
+    };
+    assert_eq!(
+        resume_err(getenv, module_file("/proj/x.py", "")),
+        "RuntimeError: only an import can be answered with a module file"
     );
 }
 
+/// The reply's path decides whether the module is a package.
 #[test]
-fn a_run_with_no_host_reads_no_files() {
+fn a_package_is_a_file_named_init() {
+    let call = first_import("import pkg\n(pkg.__file__, pkg.__path__, pkg.__package__)");
+    let ReplProgress::Complete { value, .. } = call
+        .resume(module_file("/srv/pkg/__init__.py", ""), PrintWriter::Stdout)
+        .unwrap()
+    else {
+        panic!("expected the snippet to complete");
+    };
+    assert_eq!(value, eval("('/srv/pkg/__init__.py', ['/srv/pkg'], 'pkg')", &[]));
+}
+
+#[test]
+fn a_run_with_no_host_finds_no_file() {
     let err = MontyRun::new("import foo".to_owned(), "main.py", vec![], CompileOptions::default())
         .unwrap()
         .run(vec![], ResourceTracker::default(), PrintWriter::Stdout)
@@ -304,22 +352,18 @@ fn a_run_with_no_host_reads_no_files() {
     );
 }
 
-/// Only `not_found` (what a host with no handler answers) looks for a file: a
-/// `ModuleNotFoundError` the host raises is the import's error.
+/// A `ModuleNotFoundError` the host raises is the import's error, unchanged.
 #[test]
-fn a_host_import_error_reads_no_files() {
-    let progress = repl()
-        .feed_start("import tools", Vec::<(String, MontyObject)>::new(), PrintWriter::Stdout)
-        .unwrap();
-    let ReplProgress::OsCall(call) = progress else {
-        panic!("expected the host import");
-    };
+fn a_host_import_error_is_raised() {
     let missing_dependency = MontyException::new(
         ExcType::ModuleNotFoundError,
         Some("No module named 'dependency'".to_owned()),
     );
     assert_eq!(
-        resume_err(call, ExtFunctionResult::Error(missing_dependency)),
+        resume_err(
+            first_import("import tools"),
+            ExtFunctionResult::Error(missing_dependency)
+        ),
         "ModuleNotFoundError: No module named 'dependency'"
     );
 }
@@ -340,9 +384,8 @@ fn a_module_repr_quotes_its_path() {
 #[test]
 fn an_abandoned_import_is_not_cached() {
     let files = &[("/proj/foo/__init__.py", "import os\nstage = os.getenv('STAGE')\n")];
-    let call = first_read("import foo");
-    let progress = call
-        .resume(read(files, "/proj/foo/__init__.py"), PrintWriter::Stdout)
+    let progress = first_import("import foo")
+        .resume(module_file(files[0].0, files[0].1), PrintWriter::Stdout)
         .unwrap();
     let ReplProgress::OsCall(getenv) = progress else {
         panic!("expected the module body to suspend");
@@ -350,9 +393,9 @@ fn an_abandoned_import_is_not_cached() {
     assert_eq!(getenv.function_call.name(), "os.getenv");
     let repl = getenv.into_repl();
 
-    let mut reads = Vec::new();
-    let (_, result) = feed_logged(repl, "import foo", files, &mut reads);
-    assert_eq!(reads, ["/proj/foo/__init__.py"]);
+    let mut imports = Vec::new();
+    let (_, result) = feed_logged(repl, "import foo", files, &mut imports);
+    assert_eq!(asked(&imports), [("foo", vec!["/proj"])]);
     // the body runs again, reaching the `os.getenv` this harness does not serve
     assert_eq!(
         result.unwrap_err(),

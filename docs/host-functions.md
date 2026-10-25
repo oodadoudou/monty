@@ -393,13 +393,20 @@ Submodules must be values, not factories, because they cross with their parent.
 
 The bindings answer two [OS calls](snapshots.md#the-snapshot-kinds) from `external_modules`, before mounts or `os`:
 
-- `import` requests the top-level module name and returns its value; `not_found` moves on to the module's `.py` file
-    and raises `ModuleNotFoundError` without one.
-    Dotted imports read subsequent components as attributes.
+- `import` requests a module by its dotted name and returns its value.
+    Its second argument is the module's search path: the working directory for a top-level name, or a file
+    package's `__path__` for one of its submodules.
+    When `external_modules` lacks the module, the bindings search that path for its `.py` file
+    (see [importing modules](filesystem.md#importing-modules)) and answer `module_file` with it, or `not_found`, which
+    raises `ModuleNotFoundError`.
+    A host module's submodules are its attributes and are never requested.
 - `import_stubs` requests stubs for imported host modules the session has not asked about, once before type checking.
     Return a dict of dotted paths to `.pyi` sources, including submodules, with `None` for missing stubs.
 
 A host driving suspensions itself answers both like any other OS call.
+In Rust, `ImportArgs::candidates` lists the files to read and `find_module_file` runs the search; reply with
+`ExtFunctionResult::ModuleFile` only to an `import` with a non-empty search path, which a worker from a release before
+file imports never sends.
 To type-check code that imports a host module, give the entry its `stubs`; see
 [type checking](type-checking.md#declaring-what-the-host-provides).
 

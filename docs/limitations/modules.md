@@ -1,8 +1,8 @@
 # Standard library modules
 
 Monty provides a fixed set of stdlib modules.
-Other imports request [host modules](#host-modules), then read a [`.py` file](#modules-from-files) from the working
-directory, and raise `ModuleNotFoundError` if neither provides one.
+Other imports ask the host, which answers with a [host module](#host-modules) or the module's
+[`.py` file](#modules-from-files) from the working directory, and raise `ModuleNotFoundError` if it has neither.
 There is no `sys.path` or site-packages.
 
 `os.path` (also importable as `posixpath`) is the only submodule.
@@ -89,9 +89,9 @@ typeshed's `abc` declarations.
 ## Host modules
 
 Unknown imports request the top-level name through the `import` OS call; `__import__` is undefined.
-A host module shadows a file of the same name; a `not_found` answer, or no handler, moves on to
-[files](#modules-from-files), while an exception the host raises is the import's error.
-Dotted imports such as `import a.b.c` request `a`, then read `b` and `c` as successive attributes.
+The same call carries the module's search path, so a host with no module of that name can answer with its
+[file](#modules-from-files) instead; an exception the host raises is the import's error.
+Dotted imports such as `import a.b.c` request `a`, then read `b` and `c` as successive attributes of a host module.
 Bundled modules that are not packages never request host submodules: `import os.x` raises
 `ModuleNotFoundError: No module named 'os.x'; 'os' is not a package`.
 The host's answer becomes the imported `module` object, with these differences from CPython:
@@ -111,14 +111,15 @@ The host's answer becomes the imported `module` object, with these differences f
     Wrap a class in `ClassType` to send it as a type.
 - Imports with more than 32 dotted components raise `SyntaxError`; `import a.b.c` has three.
 
-With no host to answer, `monty file.py` included, every unknown module moves on to [files](#modules-from-files);
-without a mount (`--mount` for the CLI) to serve them, it raises `ModuleNotFoundError`.
+With no host to answer, every unknown module raises `ModuleNotFoundError`.
+`monty file.py` answers imports from its `--mount` directories only (see [files](#modules-from-files)).
 
 ## Modules from files
 
-An `import` of a top-level name the host has no module for reads `<cwd>/name/__init__.py`, then `<cwd>/name.py`, and
-runs the first it finds as the module.
-The reads are `Path.read_text` OS calls, served exactly as `open()` is: by a mount or the host's `os` handler.
+An `import` the host has no module for runs the module's file, which the host finds on the search path the `import`
+call carries: `<dir>/name/__init__.py`, then `<dir>/name.py`, for each directory.
+The bindings read each candidate as a `Path.read_text` call to the `os` handler first, then through the feed's mounts
+when the handler declines it, the reverse of `open()`, where mounts go first.
 `FileNotFoundError`, `NotADirectoryError`, `IsADirectoryError` and `PermissionError` (including the answer outside
 any mount) move on to the next file; any other error raises at the `import`.
 Differences from CPython:
@@ -129,16 +130,16 @@ Differences from CPython:
     CPython would import it.
 - An unreadable module file is skipped rather than raising `PermissionError`, so the import raises
     `ModuleNotFoundError` when no later candidate exists.
-- The first import of a file module costs the host `import` call before the reads, and an import that neither the
-    host nor a file answers costs the call and two reads; the host's `os` handler sees those reads.
-    Each call and read is one suspension against
-    [`max_suspensions`](resource_limits.md#suspensions): a top-level module file costs three, a package two, and a
-    submodule one or two.
+- Each module the cache lacks costs one `import` call, one suspension against
+    [`max_suspensions`](resource_limits.md#suspensions), however many files the host reads.
+- A worker or binding from a release before file imports leaves the search out, so a mixed pairing raises
+    `ModuleNotFoundError` for every module file.
 - A file module is cached for the session by its dotted name, but there is no `sys.modules` or `importlib`, so nothing
     clears the cache: a file edited after its first import is not read again, even in later feeds or after `os.chdir`,
     and later imports of the name bind the cached module without asking the host.
     A module whose body raises is dropped from the cache, so the next import runs it again.
-- Submodules are read from the package's `__path__` directories.
+- Each submodule of a file package is its own `import` call for the dotted name (`pkg.sub`), searching the package's
+    `__path__` directories, joined to the working directory.
     Relative imports (`from . import x`) are rejected, so a package that uses them raises
     `ImportError: attempted relative import with no known parent package` when imported.
     Directories without an `__init__.py` (namespace packages) are not found.

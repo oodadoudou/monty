@@ -21,8 +21,8 @@ use monty_proto::{
 };
 use monty_types::{
     AssertMessageAnnotations, CallArgs, DEFAULT_MAX_SUSPENSIONS, ExcType, ExtFunctionResult, IMPORT_STUBS_CALL_ID,
-    MONTY_VERSION, MontyException, MontyObject, MontyUuid, NameLookupResult, NamedValues, OsFunctionCall, OsPolicy,
-    PrintStream, ResourceLimits, SleepMode, SourceRange, TypeCheckingConfig, validate_cwd,
+    MONTY_VERSION, ModuleFile, ModuleRead, MontyException, MontyObject, MontyUuid, NameLookupResult, NamedValues,
+    OsFunctionCall, OsPolicy, PrintStream, ResourceLimits, SleepMode, SourceRange, TypeCheckingConfig, validate_cwd,
 };
 #[cfg(feature = "telemetry")]
 use opentelemetry::trace::{FutureExt, TraceContextExt};
@@ -284,11 +284,12 @@ pub enum TurnEvent {
     /// no-handler default.
     ///
     /// Answer host imports from the caller's modules before other handlers.
-    /// [`OsFunctionCall::Import`] takes a module value; `NotFound` / `NotHandled` make the
-    /// sandbox read the module's `.py` file through later `ReadText` calls and run it as
-    /// sandbox code, while an error is raised at the import. [`OsFunctionCall::ImportStubs`]
-    /// takes a dict of dotted module paths to `.pyi` source or `None`, or `NotHandled` for
-    /// no stubs.
+    /// [`OsFunctionCall::Import`] takes a module value, or, failing that, the module's
+    /// [`ResumeValue::ModuleFile`] from its search path (the caller's `os` handler, then
+    /// [`Checkout::read_from_mounts`]), which the sandbox runs as sandbox code; `NotFound` /
+    /// `NotHandled` raise `ModuleNotFoundError`, and an error is raised at the import.
+    /// [`OsFunctionCall::ImportStubs`] takes a dict of dotted module paths to `.pyi` source
+    /// or `None`, or `NotHandled` for no stubs.
     OsCall {
         function_name: String,
         /// One arena holding every positional and keyword argument.
@@ -341,8 +342,11 @@ pub enum ResumeValue {
     /// other tasks; resolve later via [`Checkout::resume_futures`].
     Future,
     /// No handler exists for the called name — the sandbox raises
-    /// `NameError` (for an `import`, it reads the module's `.py` file).
+    /// `NameError` (`ModuleNotFoundError` for an `import`).
     NotFound,
+    /// The module's `.py` file, answering an `import` call with a non-empty
+    /// search path (see [`Checkout::read_from_mounts`]); the sandbox runs it.
+    ModuleFile(ModuleFile),
     /// No handler accepted this OS call — the sandbox raises the call's own
     /// no-handler default (`PermissionError` naming the path for filesystem
     /// calls, `RuntimeError` for the rest). Only valid answering a
@@ -956,11 +960,22 @@ impl Checkout {
                 "NotHandled is only valid answering an OS call".into(),
             ));
         }
+        // A child that sent no search path predates file imports and cannot read the answer.
+        let searches_files = matches!(
+            os_call.as_deref(),
+            Some(OsFunctionCall::Import(args)) if !args.search_path.is_empty()
+        );
+        if matches!(value, ResumeValue::ModuleFile(_)) && !searches_files {
+            return Err(PoolError::Protocol(
+                "ModuleFile is only valid answering an import with a search path".into(),
+            ));
+        }
         let (result, values) = match value {
             ResumeValue::Return(value) => ext_result_to_proto(ExtFunctionResult::Return(value)),
             ResumeValue::Error(exc) => ext_result_to_proto(ExtFunctionResult::Error(exc)),
             ResumeValue::Future => ext_result_to_proto(ExtFunctionResult::Future(call_id)),
             ResumeValue::NotFound => ext_result_to_proto(ExtFunctionResult::NotFound(function_name)),
+            ResumeValue::ModuleFile(file) => ext_result_to_proto(ExtFunctionResult::ModuleFile(file)),
             ResumeValue::NotHandled => (
                 pb::ExtFunctionResult {
                     kind: Some(pb::ext_function_result::Kind::NotHandled(pb::Unit {})),
@@ -1060,6 +1075,32 @@ impl Checkout {
         }
     }
 
+    /// Reads one candidate file of a pending `import` call through this feed's
+    /// mounts, without resuming the worker; [`ModuleRead::NotHandled`] when no
+    /// mount covers `path`. A host answering an import itself reads each
+    /// [`ImportArgs::candidates`](monty_types::ImportArgs::candidates) path,
+    /// then resumes with [`ResumeValue::ModuleFile`] or [`ResumeValue::NotFound`].
+    ///
+    /// The read runs on tokio's blocking pool; dropping this future mid-read
+    /// discards the worker on the next call, as for [`Self::resume_from_mounts`].
+    pub async fn read_from_mounts(&mut self, path: &str) -> Result<ModuleRead, PoolError> {
+        self.ensure_ready()?;
+        let Some(mut mounts) = self.feed_mounts.take() else {
+            return Ok(ModuleRead::NotHandled);
+        };
+        let path = path.to_owned();
+        self.turn_in_flight = true;
+        let (mounts, read) = self
+            .run_blocking(move || {
+                let read = mounts.read_module(&path);
+                (mounts, read)
+            })
+            .await?;
+        self.feed_mounts = Some(mounts);
+        self.turn_in_flight = false;
+        Ok(read)
+    }
+
     /// Answers a [`TurnEvent::NameLookup`] with a [`NameLookupResult`] (or a
     /// `MontyObject`, an `Option<MontyObject>` where `None` is `Undefined`, or
     /// a `MontyException` for `Error`): a value resolves the name; `Undefined`
@@ -1113,7 +1154,10 @@ impl Checkout {
                 let result = match value {
                     ResumeValue::Return(value) => ExtFunctionResult::Return(value),
                     ResumeValue::Error(exc) => ExtFunctionResult::Error(exc),
-                    ResumeValue::Future | ResumeValue::NotFound | ResumeValue::NotHandled => {
+                    ResumeValue::Future
+                    | ResumeValue::NotFound
+                    | ResumeValue::NotHandled
+                    | ResumeValue::ModuleFile(_) => {
                         return Err(PoolError::Protocol(
                             format!("future {call_id} must resolve to Return or Error").into(),
                         ));
