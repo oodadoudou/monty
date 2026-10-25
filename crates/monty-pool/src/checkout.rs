@@ -284,9 +284,11 @@ pub enum TurnEvent {
     /// no-handler default.
     ///
     /// Answer host imports from the caller's modules before other handlers.
-    /// [`OsFunctionCall::Import`] takes a module value; `NotFound` / `NotHandled` read the
-    /// module's `.py` file instead. [`OsFunctionCall::ImportStubs`] takes a dict of dotted
-    /// module paths to `.pyi` source or `None`, or `NotHandled` for no stubs.
+    /// [`OsFunctionCall::Import`] takes a module value; `NotFound` / `NotHandled` make the
+    /// sandbox read the module's `.py` file through later `ReadText` calls and run it as
+    /// sandbox code, while an error is raised at the import. [`OsFunctionCall::ImportStubs`]
+    /// takes a dict of dotted module paths to `.pyi` source or `None`, or `NotHandled` for
+    /// no stubs.
     OsCall {
         function_name: String,
         /// One arena holding every positional and keyword argument.

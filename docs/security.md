@@ -85,9 +85,10 @@ Validate arguments in the host function as you would validate any untrusted inpu
 
 `external_modules` on `checkout()` selects which host modules the session's code can import; the bindings answer an
 import only from that mapping and never consult the host's own import system.
-An import the mapping does not answer reads `<cwd>/name/__init__.py` or `<cwd>/name.py` through the mounts and `os`
+An import the mapping has no module for reads `<cwd>/name/__init__.py` or `<cwd>/name.py` through the mounts and `os`
 callback, as `open()` would, and runs the file as sandbox code, with the capabilities the session's code already has
 and never the host's import system (see [importing modules](filesystem.md#importing-modules)).
+An exception the mapping's factory raises is the import's error, and no file is read.
 A dict exposes all its public items, and its callables run on the host.
 A `ClassInstance` exposes only what its wrapper policy allows.
 Imports and stub requests use runtime-generated OS calls; sandbox code cannot call them by name (`__import__` is

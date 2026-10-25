@@ -144,7 +144,7 @@ Differences from CPython:
     Directories without an `__init__.py` (namespace packages) are not found.
 - Module globals are `__name__`, `__file__`, `__package__` and, for a package, `__path__`; `__spec__`, `__loader__`,
     `__cached__`, `__builtins__` and `__doc__` are not defined.
-    `m.__dict__` and `vars(m)` raise `AttributeError`, and `dir(m)` is unsupported.
+    `m.__dict__` raises `AttributeError`, and `vars` and `dir` are not implemented (see [builtins.md](builtins.md)).
 - Module code looks names up in its globals and the builtins, never on the host: calling a
     [host function](../host-functions.md) by name raises `NameError` unless the importer binds it on the module first,
     as in `helpers.fetch = fetch`.
