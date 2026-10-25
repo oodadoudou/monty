@@ -39,6 +39,7 @@ use crate::{
     frozen::FrozenFunction,
     function::Function,
     hash::{HashValue, RESERVED_STRING_HASHES, WithHash, hash_python_str},
+    prepare::SnippetNames,
 };
 
 /// Index into the string interner's storage.
@@ -1268,6 +1269,8 @@ pub enum StaticStrings {
     Get,
     /// `csv.get_dialect()` function.
     GetDialect,
+    /// `typing.get_type_hints()` function.
+    GetTypeHints,
     /// `os.path.getatime()` function.
     Getatime,
     /// `decimal.getcontext()` function.
@@ -1292,6 +1295,8 @@ pub enum StaticStrings {
     Glob,
     /// `globals` parameter of eval/exec.
     Globals,
+    /// `globalns` parameter of `typing.get_type_hints()`.
+    Globalns,
     /// `time.gmtime()` function.
     Gmtime,
     /// `match.group()` method
@@ -1362,6 +1367,8 @@ pub enum StaticStrings {
     Ignorechars,
     /// `complex.imag` attribute.
     Imag,
+    /// `include_extras` parameter of `typing.get_type_hints()`.
+    IncludeExtras,
     /// `binascii.Incomplete` exception class.
     #[strum(serialize = "Incomplete")]
     IncompleteClass,
@@ -1569,6 +1576,8 @@ pub enum StaticStrings {
     Localcontext,
     /// `locals` parameter of eval/exec.
     Locals,
+    /// `localns` parameter of `typing.get_type_hints()`.
+    Localns,
     /// `time.localtime()` function.
     Localtime,
     /// `math.log()` function.
@@ -2803,6 +2812,9 @@ pub(crate) struct Interns {
     /// Prevents runtime insertion or a second compiler from consuming provisional IDs.
     #[serde(skip)]
     compiling: Cell<bool>,
+    /// Committed `typing.get_type_hints()` snippets by mode and annotation text.
+    #[serde(skip)]
+    hint_snippets: RefCell<AHashMap<(SnippetNames, Arc<str>), FunctionId>>,
 }
 
 impl Default for Interns {
@@ -2852,6 +2864,7 @@ impl TryFrom<InternsWire> for Interns {
             string_id_by_name: RefCell::new(string_id_by_name),
             static_string_ids: RefCell::new(static_string_ids),
             compiling: Cell::new(false),
+            hint_snippets: RefCell::default(),
         })
     }
 }
@@ -2878,6 +2891,7 @@ impl Interns {
             string_id_by_name: RefCell::default(),
             static_string_ids: RefCell::default(),
             compiling: Cell::new(false),
+            hint_snippets: RefCell::default(),
         }
     }
 
@@ -2894,6 +2908,7 @@ impl Interns {
             string_id_by_name: RefCell::new(AHashMap::with_capacity(capacity)),
             static_string_ids: RefCell::new(AHashMap::with_capacity(CORE_STATIC_STRINGS.len())),
             compiling: Cell::new(false),
+            hint_snippets: RefCell::default(),
         };
         for entry in CORE_ENTRIES.iter() {
             let value = entry.static_value().expect("core entries are static");
@@ -2994,6 +3009,16 @@ impl Interns {
     }
 
     /// Identifies implementation frames hidden from tracebacks and namespace introspection.
+    /// The committed snippet that evaluates annotation `text` in mode `names`, if compiled before.
+    pub(crate) fn hint_snippet(&self, names: SnippetNames, text: &Arc<str>) -> Option<FunctionId> {
+        self.hint_snippets.borrow().get(&(names, Arc::clone(text))).copied()
+    }
+
+    /// Records a committed annotation snippet for [`Self::hint_snippet`].
+    pub(crate) fn set_hint_snippet(&self, names: SnippetNames, text: Arc<str>, id: FunctionId) {
+        self.hint_snippets.borrow_mut().insert((names, text), id);
+    }
+
     pub(crate) fn is_internal_function(&self, id: FunctionId) -> bool {
         self.frozen_functions.borrow().values().any(|&function| function == id)
     }
