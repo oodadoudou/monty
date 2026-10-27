@@ -1253,7 +1253,7 @@ class OSAccess(AbstractOS):
 
     def path_rmdir(self, path: PurePosixPath) -> None:
         dir = self._get_dir(path)
-        if not PurePosixPath(path).name:
+        if not path.name:
             raise OSError(f'[Errno 16] Device or resource busy: {str(path)!r}')
         if dir:
             raise OSError(f'[Errno 39] Directory not empty: {str(path)!r}')
