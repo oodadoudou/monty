@@ -517,7 +517,7 @@ class AbstractOS(ABC):
         Raises:
             FileNotFoundError: If the directory does not exist.
             NotADirectoryError: If the path is not a directory.
-            OSError: If the directory is not empty.
+            OSError: If the directory is not empty or is an unremovable filesystem root.
         """
         raise NotImplementedError
 
@@ -1253,6 +1253,8 @@ class OSAccess(AbstractOS):
 
     def path_rmdir(self, path: PurePosixPath) -> None:
         dir = self._get_dir(path)
+        if not PurePosixPath(path).name:
+            raise OSError(f'[Errno 16] Device or resource busy: {str(path)!r}')
         if dir:
             raise OSError(f'[Errno 39] Directory not empty: {str(path)!r}')
         # remove from parent

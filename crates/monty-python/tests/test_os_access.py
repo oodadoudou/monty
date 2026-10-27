@@ -926,6 +926,33 @@ Path('/test/newdir').rmdir()
     assert fs.path_exists(P('/test/newdir')) is False
 
 
+@pytest.mark.parametrize('populated', [False, True])
+def test_rmdir_root_via_monty(monty_run: RunMonty, populated: bool):
+    fs = OSAccess([MemoryFile('/file.txt', 'hello')] if populated else [])
+    code = """
+from pathlib import Path
+try:
+    Path('/').rmdir()
+except OSError as e:
+    result = str(e)
+(result, Path('/').is_dir())
+"""
+    assert monty_run(code, os=fs) == snapshot(("[Errno 16] Device or resource busy: '/'", True))
+    if populated:
+        assert fs.path_read_text(P('/file.txt')) == snapshot('hello')
+
+
+@pytest.mark.parametrize('populated', [False, True])
+def test_rmdir_root_direct(populated: bool):
+    fs = OSAccess([MemoryFile('/file.txt', 'hello')] if populated else [])
+    with pytest.raises(OSError) as exc_info:
+        fs.path_rmdir(P('/'))
+    assert str(exc_info.value) == snapshot("[Errno 16] Device or resource busy: '/'")
+    assert fs.path_is_dir(P('/')) == snapshot(True)
+    if populated:
+        assert fs.path_read_text(P('/file.txt')) == snapshot('hello')
+
+
 def test_rmdir_non_empty_directory_via_monty(monty_run: RunMonty):
     """Path.rmdir() raises OSError for non-empty directory via Monty."""
     fs = OSAccess([MemoryFile('/test/subdir/file.txt', content='hello')])
