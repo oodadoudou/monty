@@ -1330,16 +1330,17 @@ s = Path('/test/file.txt').stat()
     assert result == snapshot((11, 0o644))
 
 
-def test_stat_file_custom_permissions(monty_run: RunMonty):
+@pytest.mark.parametrize('permissions', [0o755, 0o1755, 0o2755, 0o4755, 0o7755])
+def test_stat_file_custom_permissions(monty_run: RunMonty, permissions: int):
     """path_stat returns custom file permissions."""
-    fs = OSAccess([MemoryFile('/test/file.txt', content='hello', permissions=0o755)])
+    fs = OSAccess([MemoryFile('/test/file.txt', content='hello', permissions=permissions)])
     code = """
 from pathlib import Path
 s = Path('/test/file.txt').stat()
-s.st_mode & 0o777
+s.st_mode
 """
     result = monty_run(code, os=fs)
-    assert result == snapshot(0o755)
+    assert result == 0o100000 | permissions
 
 
 def test_stat_directory(monty_run: RunMonty):

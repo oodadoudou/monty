@@ -5,6 +5,7 @@ import datetime
 import functools
 import inspect
 import os
+import stat
 import time
 from abc import ABC, abstractmethod
 from pathlib import PurePosixPath
@@ -94,7 +95,7 @@ class StatResult(NamedTuple):
             mtime: Modification time as Unix timestamp, defaults to Now.
         """
         # If only permission bits provided (no file type), add regular file type
-        if mode < 0o1000:
+        if not stat.S_IFMT(mode):
             mode = mode | 0o100_000
         mtime = time.time() if mtime is None else mtime
         return cls(mode, 0, 0, 1, 0, 0, size, mtime, mtime, mtime)
@@ -113,7 +114,7 @@ class StatResult(NamedTuple):
             A namedtuple with stat_result fields
         """
         # If only permission bits provided (no file type), add directory type
-        if mode < 0o1000:
+        if not stat.S_IFMT(mode):
             mode = mode | 0o040_000
 
         mtime = time.time() if mtime is None else mtime
