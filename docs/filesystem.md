@@ -277,6 +277,8 @@ A directory matched before the pattern's last part keeps a trailing `/` there.
 Mounts reply that way unless the matches outnumber the entries they read.
 [`AbstractOS.path_scan()`][pydantic_monty.AbstractOS.path_scan] does this by default from `path_iterdir()` and the
 predicates, returning [`ScanEntry`][pydantic_monty.ScanEntry] tuples.
+When the root is neither an existing path nor a symlink, it calls `path_stat()` to distinguish a missing path
+from an invalid parent directory.
 A handler that declines `Path.scan` makes `glob()` return nothing and `walk()` report a `PermissionError`, since both
 treat a directory they cannot read as CPython does.
 With `os_policy` configured to call the host, the handler also receives clock and sleep calls

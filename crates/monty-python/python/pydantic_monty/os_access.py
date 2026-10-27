@@ -559,7 +559,8 @@ class AbstractOS(ABC):
         estimated at four bytes per character for both absolute and relative paths.
 
         The default walks the tree with `path_iterdir()`, `path_is_dir()`, `path_is_file()` and
-        `path_is_symlink()`; override it to answer in fewer host calls.
+        `path_is_symlink()`; override it to answer in fewer host calls. When neither the root
+        nor a symlink exists, `path_stat()` surfaces the underlying lookup error.
 
         Args:
             path: The directory to scan; may also name a file, which is described but not listed.
@@ -571,9 +572,11 @@ class AbstractOS(ABC):
 
         Raises:
             FileNotFoundError: If `path` does not exist.
+            NotADirectoryError: If a parent of `path` is not a directory.
             RuntimeError: If the default scan exceeds its entry or path-data limit.
         """
         if not (self.path_exists(path) or self.path_is_symlink(path)):
+            self.path_stat(path)
             raise FileNotFoundError(f'[Errno 2] No such file or directory: {str(path)!r}')
         root = self._scan_entry('', path)
         entries = [root]

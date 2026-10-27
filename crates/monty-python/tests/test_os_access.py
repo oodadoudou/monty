@@ -1101,6 +1101,45 @@ except FileNotFoundError as e:
     assert monty_run(code, os=scan_tree()) == snapshot(("[Errno 2] No such file or directory: '/missing'", [], []))
 
 
+@pytest.mark.parametrize('via_monty', [False, True])
+def test_scan_below_file(monty_run: RunMonty, via_monty: bool):
+    fs = OSAccess([MemoryFile('/a', 'original')])
+    if via_monty:
+        code = """
+import os
+from pathlib import Path
+errors = []
+try:
+    os.scandir('/a/child')
+except NotADirectoryError as e:
+    errors.append(str(e))
+list(os.walk('/a/child', onerror=lambda e: errors.append(f'{type(e).__name__}: {e}')))
+(errors, list(Path('/a/child').glob('*')))
+"""
+        assert monty_run(code, os=fs) == snapshot(
+            (
+                [
+                    "[Errno 20] Not a directory: '/a/child'",
+                    "NotADirectoryError: [Errno 20] Not a directory: '/a/child'",
+                ],
+                [],
+            )
+        )
+    else:
+        with pytest.raises(NotADirectoryError) as exc_info:
+            fs.path_scan(P('/a/child'), max_depth=None, follow_symlinks=False)
+        assert str(exc_info.value) == snapshot("[Errno 20] Not a directory: '/a/child'")
+
+
+def test_path_scan_does_not_read_file():
+    read = Mock(side_effect=AssertionError('scan must not read file contents'))
+    fs = OSAccess([CallbackFile('/a', read=read, write=Mock())])
+    assert fs.path_scan(P('/a'), max_depth=None, follow_symlinks=False) == snapshot(
+        [ScanEntry(path='', is_dir=False, is_file=True, is_symlink=False)]
+    )
+    read.assert_not_called()
+
+
 class UnreadableOS(OSAccess):
     """Refuses to list one directory, as a permissions error would."""
 
