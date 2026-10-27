@@ -1670,6 +1670,53 @@ def test_rename_directory_similar_prefix(monty_run: RunMonty, via_monty: bool):
     assert fs.path_read_text(P('/ab/keep.txt')) == 'keep'
 
 
+@pytest.mark.parametrize('via_monty', [False, True])
+@pytest.mark.parametrize('child', ['/a/child', '/a/child/nested'])
+@pytest.mark.parametrize(
+    'operation', ['read_text', 'read_bytes', 'stat', 'iterdir', 'write_text', 'mkdir', 'unlink', 'rmdir', 'open']
+)
+def test_intermediate_file_error(monty_run: RunMonty, via_monty: bool, child: str, operation: str):
+    file = MemoryFile('/a', 'original')
+    fs = OSAccess([file])
+    args = {'write_text': "'new'", 'mkdir': 'parents=True', 'open': "'a'"}.get(operation, '')
+    if via_monty:
+        code = f'from pathlib import Path; Path({child!r}).{operation}({args})'
+        with pytest.raises(MontyRuntimeError) as exc_info:
+            monty_run(code, os=fs)
+        assert str(exc_info.value) == f'NotADirectoryError: [Errno 20] Not a directory: {child!r}'
+    else:
+        kwargs: dict[str, Any] = {'parents': True, 'exist_ok': False} if operation == 'mkdir' else {}
+        positional = ['new'] if operation == 'write_text' else ['a'] if operation == 'open' else []
+        with pytest.raises(NotADirectoryError) as exc_info:
+            getattr(fs, 'path_' + operation)(P(child), *positional, **kwargs)
+        assert str(exc_info.value) == f'[Errno 20] Not a directory: {child!r}'
+    assert file.content == snapshot('original')
+    assert file.deleted == snapshot(False)
+    assert fs.path_exists(P(child)) == snapshot(False)
+    assert fs.path_is_file(P(child)) == snapshot(False)
+    assert fs.path_is_dir(P(child)) == snapshot(False)
+    if via_monty:
+        assert monty_run(
+            f'from pathlib import Path; p = Path({child!r}); (p.exists(), p.is_file(), p.is_dir())', os=fs
+        ) == snapshot((False, False, False))
+
+
+@pytest.mark.parametrize('via_monty', [False, True])
+@pytest.mark.parametrize('source, target', [('/a/child', '/b'), ('/b', '/a/child')])
+def test_rename_intermediate_file(monty_run: RunMonty, via_monty: bool, source: str, target: str):
+    files = [MemoryFile('/a', 'a'), MemoryFile('/b', 'b')]
+    fs = OSAccess(files)
+    with pytest.raises(MontyRuntimeError if via_monty else NotADirectoryError) as exc_info:
+        if via_monty:
+            monty_run(f'from pathlib import Path; Path({source!r}).rename({target!r})', os=fs)
+        else:
+            fs.path_rename(P(source), P(target))
+    prefix = 'NotADirectoryError: ' if via_monty else ''
+    assert str(exc_info.value) == prefix + "[Errno 20] Not a directory: '/a/child'"
+    assert fs.path_iterdir(P('/')) == snapshot([P('/a'), P('/b')])
+    assert [(f.path, f.content, f.deleted) for f in files] == snapshot([(P('/a'), 'a', False), (P('/b'), 'b', False)])
+
+
 # =============================================================================
 # Path Resolution (via Monty)
 # =============================================================================

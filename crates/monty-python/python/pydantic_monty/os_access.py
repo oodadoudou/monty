@@ -1091,13 +1091,13 @@ class OSAccess(AbstractOS):
         return f'OSAccess(files={self.files}, environ={self.environ})'
 
     def path_exists(self, path: PurePosixPath) -> bool:
-        return self._get_entry(path) is not None
+        return self._get_entry(path, strict=False) is not None
 
     def path_is_file(self, path: PurePosixPath) -> bool:
-        return _is_file(self._get_entry(path))
+        return _is_file(self._get_entry(path, strict=False))
 
     def path_is_dir(self, path: PurePosixPath) -> bool:
-        return _is_dir(self._get_entry(path))
+        return _is_dir(self._get_entry(path, strict=False))
 
     def path_is_symlink(self, path: PurePosixPath) -> bool:
         return False
@@ -1288,10 +1288,10 @@ class OSAccess(AbstractOS):
         parent_dir = self._parent_entry(path)
         assert _is_dir(parent_dir), f'Expected parent of a file to always be a directory, got {parent_dir}'
 
+        target_entry = self._get_entry(target)
         target_parent = self._parent_entry(target)
         if not _is_dir(target_parent):
             raise FileNotFoundError(f'[Errno 2] No such file or directory: {str(path)!r} -> {str(target)!r}')
-        target_entry = self._get_entry(target)
 
         if _is_file(src_entry):
             if _is_dir(target_entry):
@@ -1342,7 +1342,7 @@ class OSAccess(AbstractOS):
     def get_environ(self) -> dict[str, str]:
         return self.environ
 
-    def _get_entry(self, path: PurePosixPath) -> Tree | AbstractFile | None:
+    def _get_entry(self, path: PurePosixPath, *, strict: bool = True) -> Tree | AbstractFile | None:
         dir = self._tree
 
         *dir_parts, name = PurePosixPath(path).parts
@@ -1351,6 +1351,8 @@ class OSAccess(AbstractOS):
             entry = dir.get(part)
             if _is_dir(entry):
                 dir = entry
+            elif strict and _is_file(entry):
+                raise NotADirectoryError(f'[Errno 20] Not a directory: {str(path)!r}')
             else:
                 return None
 
