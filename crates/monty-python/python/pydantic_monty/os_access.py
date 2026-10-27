@@ -1346,6 +1346,11 @@ class OSAccess(AbstractOS):
         return self.environ
 
     def _get_entry(self, path: PurePosixPath, *, strict: bool = True) -> Tree | AbstractFile | None:
+        """Look up a file or directory, returning `None` if a component is missing.
+
+        If an intermediate component is a file, raise `NotADirectoryError` in strict
+        mode; otherwise return `None` so existence/type predicates report `False`.
+        """
         dir = self._tree
 
         *dir_parts, name = PurePosixPath(path).parts
