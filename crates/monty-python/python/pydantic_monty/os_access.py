@@ -576,6 +576,7 @@ class AbstractOS(ABC):
             RuntimeError: If the default scan exceeds its entry or path-data limit.
         """
         if not (self.path_exists(path) or self.path_is_symlink(path)):
+            # Surface lookup errors (e.g. an intermediate file) hidden by the predicates.
             self.path_stat(path)
             raise FileNotFoundError(f'[Errno 2] No such file or directory: {str(path)!r}')
         root = self._scan_entry('', path)
